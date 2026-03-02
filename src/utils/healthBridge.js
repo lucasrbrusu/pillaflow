@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { NativeModules, Platform, TurboModuleRegistry } from 'react-native';
 
 const HEALTH_LINK_MODULE = 'react-native-health-link';
 const IOS_HEALTH_KIT_MODULE = 'react-native-health';
@@ -13,6 +13,7 @@ const WRITE_TIMEOUT_MS = 5000;
 const ANDROID_RECORD_STEPS = 'Steps';
 const ANDROID_RECORD_ACTIVE_CALORIES = 'ActiveCaloriesBurned';
 const ANDROID_RECORD_NUTRITION = 'Nutrition';
+const HEALTH_KIT_METHOD_HINTS = ['initHealthKit', 'isAvailable', 'getDailyStepCountSamples', 'saveFood'];
 
 let cachedHealthLinkModule = null;
 let didTryLoadHealthLinkModule = false;
@@ -20,6 +21,34 @@ let cachedHealthKitModule = null;
 let didTryLoadHealthKitModule = false;
 let cachedHealthConnectModule = null;
 let didTryLoadHealthConnectModule = false;
+
+const hasHealthKitMethods = (moduleRef) =>
+  Boolean(
+    moduleRef &&
+      typeof moduleRef === 'object' &&
+      HEALTH_KIT_METHOD_HINTS.some((methodName) => typeof moduleRef?.[methodName] === 'function')
+  );
+
+const getHealthKitModuleFromNativeRuntime = () => {
+  const candidates = [
+    NativeModules?.AppleHealthKit,
+    NativeModules?.RCTAppleHealthKit,
+    NativeModules?.RNAppleHealthKit,
+  ];
+
+  const turboModuleNames = ['AppleHealthKit', 'RCTAppleHealthKit', 'RNAppleHealthKit'];
+  if (TurboModuleRegistry && typeof TurboModuleRegistry.get === 'function') {
+    for (const moduleName of turboModuleNames) {
+      try {
+        candidates.push(TurboModuleRegistry.get(moduleName));
+      } catch (error) {
+        // Ignore missing turbo module registrations.
+      }
+    }
+  }
+
+  return candidates.find((candidate) => hasHealthKitMethods(candidate)) || null;
+};
 
 const loadHealthLinkModule = () => {
   if (didTryLoadHealthLinkModule) {
@@ -39,13 +68,21 @@ const loadHealthLinkModule = () => {
 
 const loadHealthKitModule = () => {
   if (didTryLoadHealthKitModule) {
+    if (!hasHealthKitMethods(cachedHealthKitModule)) {
+      const runtimeModule = getHealthKitModuleFromNativeRuntime();
+      if (runtimeModule) {
+        if (cachedHealthKitModule?.Constants && !runtimeModule.Constants) {
+          runtimeModule.Constants = cachedHealthKitModule.Constants;
+        }
+        cachedHealthKitModule = runtimeModule;
+      }
+    }
     return cachedHealthKitModule;
   }
 
   const normalizeHealthKitModule = (moduleRef) => {
     if (!moduleRef || typeof moduleRef !== 'object') return moduleRef;
 
-    const methodHints = ['initHealthKit', 'isAvailable', 'getDailyStepCountSamples', 'saveFood'];
     const candidates = [
       moduleRef,
       moduleRef.default,
@@ -55,7 +92,7 @@ const loadHealthKitModule = () => {
 
     for (const candidate of candidates) {
       if (!candidate || typeof candidate !== 'object') continue;
-      if (!methodHints.some((methodName) => typeof candidate?.[methodName] === 'function')) continue;
+      if (!hasHealthKitMethods(candidate)) continue;
       if (moduleRef?.Constants && !candidate.Constants) {
         candidate.Constants = moduleRef.Constants;
       }
@@ -72,6 +109,17 @@ const loadHealthKitModule = () => {
   } catch (err) {
     cachedHealthKitModule = null;
   }
+
+  if (!hasHealthKitMethods(cachedHealthKitModule)) {
+    const runtimeModule = getHealthKitModuleFromNativeRuntime();
+    if (runtimeModule) {
+      if (cachedHealthKitModule?.Constants && !runtimeModule.Constants) {
+        runtimeModule.Constants = cachedHealthKitModule.Constants;
+      }
+      cachedHealthKitModule = runtimeModule;
+    }
+  }
+
   return cachedHealthKitModule;
 };
 
