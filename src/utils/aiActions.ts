@@ -1,6 +1,6 @@
 import { supabase } from "../utils/supabaseClient";
 
-async function getAuthHeaderOrThrow() {
+async function assertActiveSessionOrThrow() {
   const {
     data: { session },
     error,
@@ -15,14 +15,13 @@ async function getAuthHeaderOrThrow() {
     throw new Error("No active auth session. Please sign in again.");
   }
 
-  return { Authorization: `Bearer ${token}` };
+  return token;
 }
 
 export async function approveProposal(proposal_id: string) {
-  const headers = await getAuthHeaderOrThrow();
+  await assertActiveSessionOrThrow();
   const { data, error } = await supabase.functions.invoke("apply_action", {
     body: { proposal_id },
-    headers,
   });
 
   if (error) throw error;
