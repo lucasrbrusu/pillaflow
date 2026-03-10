@@ -284,7 +284,12 @@ const AuthScreen = ({ navigation }) => {
               disabled={isCtaDisabled}
               activeOpacity={0.85}
             >
-              <LinearGradient colors={authTheme.buttonGradient} style={styles.ctaGradient}>
+              <View
+                style={[
+                  styles.ctaContent,
+                  { backgroundColor: authTheme.buttonGradient[0] },
+                ]}
+              >
                 {isSubmitting ? (
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
@@ -293,7 +298,7 @@ const AuthScreen = ({ navigation }) => {
                     <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={styles.ctaIcon} />
                   </>
                 )}
-              </LinearGradient>
+              </View>
             </TouchableOpacity>
 
             <Text style={styles.createPrompt}>Don't have an account?</Text>
@@ -425,7 +430,7 @@ const createStyles = (themeColorsParam = colors) => {
     },
     logoTitle: {
       fontSize: 30,
-      fontWeight: '800',
+      fontWeight: '700',
       color: baseText,
       fontFamily: displayFont,
     },
@@ -472,7 +477,7 @@ const createStyles = (themeColorsParam = colors) => {
     ctaDisabled: {
       opacity: 0.6,
     },
-    ctaGradient: {
+    ctaContent: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',

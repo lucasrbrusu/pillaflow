@@ -309,6 +309,9 @@ const IOS_MAX_SCHEDULED_NOTIFICATIONS = 60;
 const STATUS_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const PRESENCE_WRITE_INTERVAL_MS = 2 * 60 * 1000;
 const HEALTH_METRICS_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
+const NETWORK_BACKOFF_BASE_MS = 10 * 1000;
+const NETWORK_BACKOFF_MAX_MS = 2 * 60 * 1000;
+const NETWORK_ERROR_LOG_THROTTLE_MS = 30 * 1000;
 const DATA_REFRESH_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_TTL_MS = 30 * 60 * 1000;
 const PUSH_REGISTRATION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -1380,6 +1383,22 @@ const isInvalidRefreshTokenError = (error) => {
   );
 };
 
+const isNetworkRequestFailedError = (error) => {
+  if (!error) return false;
+  const message = [error?.message, error?.details, error?.error_description, error?.hint]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return (
+    message.includes('network request failed') ||
+    message.includes('failed to fetch') ||
+    message.includes('network error') ||
+    message.includes('socket') ||
+    message.includes('timed out') ||
+    message.includes('internet connection appears to be offline')
+  );
+};
+
 const TASK_ARCHIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const getTaskDueDateTime = (task) => {
@@ -1520,6 +1539,13 @@ const achievementSyncInFlightRef = useRef(false);
   const friendResponseSignatureRef = useRef('');
   const taskInviteResponseSignatureRef = useRef('');
   const groupInviteSignatureRef = useRef('');
+  const taskInvitesRef = useRef({ incoming: [], outgoing: [], responses: [] });
+  const groupsRef = useRef([]);
+  const networkFailureStateRef = useRef({
+    consecutiveFailures: 0,
+    backoffUntilMs: 0,
+    lastLoggedAtByKey: {},
+  });
 
  // Profile State
   const [profile, setProfile] = useState(defaultProfile);
@@ -1547,6 +1573,61 @@ const achievementSyncInFlightRef = useRef(false);
   const [themeName, setThemeName] = useState('default');
   const [themeColors, setThemeColors] = useState({ ...colors });
   const [themeReady, setThemeReady] = useState(false);
+
+  useEffect(() => {
+    taskInvitesRef.current = taskInvites;
+  }, [taskInvites]);
+
+  useEffect(() => {
+    groupsRef.current = groups;
+  }, [groups]);
+
+  const shouldSkipNetworkRequests = useCallback(() => {
+    return Date.now() < (networkFailureStateRef.current?.backoffUntilMs || 0);
+  }, []);
+
+  const noteNetworkFailure = useCallback((key, error) => {
+    const now = Date.now();
+    const current = networkFailureStateRef.current || {
+      consecutiveFailures: 0,
+      backoffUntilMs: 0,
+      lastLoggedAtByKey: {},
+    };
+    const nextFailures = Math.min((current.consecutiveFailures || 0) + 1, 6);
+    const backoffMs = Math.min(
+      NETWORK_BACKOFF_BASE_MS * 2 ** Math.max(0, nextFailures - 1),
+      NETWORK_BACKOFF_MAX_MS
+    );
+    const lastLoggedAt = current.lastLoggedAtByKey?.[key] || 0;
+    const shouldLog = now - lastLoggedAt >= NETWORK_ERROR_LOG_THROTTLE_MS;
+
+    networkFailureStateRef.current = {
+      consecutiveFailures: nextFailures,
+      backoffUntilMs: now + backoffMs,
+      lastLoggedAtByKey: {
+        ...(current.lastLoggedAtByKey || {}),
+        [key]: shouldLog ? now : lastLoggedAt,
+      },
+    };
+
+    if (shouldLog) {
+      console.log(
+        `Network request failed (${key}); retrying in ${Math.round(backoffMs / 1000)}s`,
+        error
+      );
+    }
+  }, []);
+
+  const noteNetworkSuccess = useCallback(() => {
+    const current = networkFailureStateRef.current;
+    if (!current) return;
+    if (!current.consecutiveFailures && !current.backoffUntilMs) return;
+    networkFailureStateRef.current = {
+      ...current,
+      consecutiveFailures: 0,
+      backoffUntilMs: 0,
+    };
+  }, []);
 
   useEffect(() => {
     friendSearchCacheRef.current.clear();
@@ -1998,6 +2079,7 @@ const achievementSyncInFlightRef = useRef(false);
 
     const tick = async () => {
       if (isCancelled || appStateRef.current !== 'active') return;
+      if (shouldSkipNetworkRequests()) return;
       const now = Date.now();
       if (now - lastStatusPollRef.current < STATUS_POLL_INTERVAL_MS) return;
       lastStatusPollRef.current = now;
@@ -2036,7 +2118,13 @@ const achievementSyncInFlightRef = useRef(false);
       stopPolling();
       sub?.remove?.();
     };
-  }, [authUser?.id, fetchTaskInvites, refreshFriendStatuses, updateUserPresence]);
+  }, [
+    authUser?.id,
+    fetchTaskInvites,
+    refreshFriendStatuses,
+    shouldSkipNetworkRequests,
+    updateUserPresence,
+  ]);
 
   useEffect(() => {
     userStatusesRef.current = userStatuses;
@@ -2978,15 +3066,36 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
           .from('user_status')
           .upsert({ user_id: authUser.id, last_seen: nowISO }, { onConflict: 'user_id' });
         if (retry.error) {
-          console.log('Error updating user status after profile upsert:', retry.error);
+          if (isNetworkRequestFailedError(retry.error)) {
+            noteNetworkFailure('user_status_upsert_retry', retry.error);
+          } else {
+            console.log('Error updating user status after profile upsert:', retry.error);
+          }
         }
       } else if (error) {
-        console.log('Error updating user status:', error);
+        if (isNetworkRequestFailedError(error)) {
+          noteNetworkFailure('user_status_upsert', error);
+        } else {
+          console.log('Error updating user status:', error);
+        }
+      } else {
+        noteNetworkSuccess();
       }
     } catch (err) {
-      console.log('Error updating user status:', err);
+      if (isNetworkRequestFailedError(err)) {
+        noteNetworkFailure('user_status_upsert_exception', err);
+      } else {
+        console.log('Error updating user status:', err);
+      }
     }
-  }, [authUser?.id, profile.name, profile.username, profile.email]);
+  }, [
+    authUser?.id,
+    noteNetworkFailure,
+    noteNetworkSuccess,
+    profile.name,
+    profile.username,
+    profile.email,
+  ]);
 
   const fetchFriendships = useCallback(
     async (userIdParam, blockStateParam) => {
@@ -3234,6 +3343,9 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
     async (userIdParam) => {
       const userId = userIdParam || authUser?.id;
       if (!userId) return { incoming: [], outgoing: [], responses: [] };
+      if (shouldSkipNetworkRequests()) {
+        return taskInvitesRef.current;
+      }
 
       const inviteSelectWithDuration =
         'id, from_user_id, to_user_id, status, task_id, task_title, task_description, task_priority, task_date, task_time, task_duration_minutes, created_at';
@@ -3258,12 +3370,17 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
 
       if (error) {
         if (!isMissingRelationError(error, 'task_invites')) {
+          if (isNetworkRequestFailedError(error)) {
+            noteNetworkFailure('task_invites', error);
+            return taskInvitesRef.current;
+          }
           console.log('Error fetching task invites:', error);
         }
         const empty = { incoming: [], outgoing: [], responses: [] };
         setTaskInvites(empty);
         return empty;
       }
+      noteNetworkSuccess();
 
       const invites = data || [];
       const involvedIds = Array.from(
@@ -3282,7 +3399,11 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
           .in('id', involvedIds);
 
         if (profileError) {
-          console.log('Error fetching task invite profiles:', profileError);
+          if (isNetworkRequestFailedError(profileError)) {
+            noteNetworkFailure('task_invite_profiles', profileError);
+          } else {
+            console.log('Error fetching task invite profiles:', profileError);
+          }
         } else {
           profileRows = profilesData || [];
         }
@@ -3330,7 +3451,7 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
 
       return { incoming, outgoing, responses };
     },
-    [authUser?.id]
+    [authUser?.id, noteNetworkFailure, noteNetworkSuccess, shouldSkipNetworkRequests]
   );
 
   const fetchGroupMembers = useCallback(
@@ -3416,6 +3537,7 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
     async (userIdParam) => {
       const userId = userIdParam || authUser?.id;
       if (!userId) return [];
+      if (shouldSkipNetworkRequests()) return groupsRef.current;
 
       const { data, error } = await supabase
         .from('group_members')
@@ -3424,10 +3546,15 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
         .order('created_at', { ascending: false });
 
       if (error) {
+        if (isNetworkRequestFailedError(error)) {
+          noteNetworkFailure('groups', error);
+          return groupsRef.current;
+        }
         console.log('Error fetching groups:', error);
         setGroups([]);
         return [];
       }
+      noteNetworkSuccess();
 
       const groupIds = Array.from(
         new Set((data || []).map((row) => row.group_id || row.groups?.id).filter(Boolean))
@@ -3450,13 +3577,21 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
         ]);
 
         if (memberResult.error) {
-          console.log('Error fetching group member roster:', memberResult.error);
+          if (isNetworkRequestFailedError(memberResult.error)) {
+            noteNetworkFailure('group_member_roster', memberResult.error);
+          } else {
+            console.log('Error fetching group member roster:', memberResult.error);
+          }
         } else {
           memberRows = memberResult.data || [];
         }
 
         if (inviteResult.error) {
-          console.log('Error fetching accepted group invites:', inviteResult.error);
+          if (isNetworkRequestFailedError(inviteResult.error)) {
+            noteNetworkFailure('group_invites_accepted', inviteResult.error);
+          } else {
+            console.log('Error fetching accepted group invites:', inviteResult.error);
+          }
         } else {
           acceptedInvites = inviteResult.data || [];
         }
@@ -3479,7 +3614,11 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
             .in('id', ids);
 
           if (profileError) {
-            console.log('Error fetching roster profiles:', profileError);
+            if (isNetworkRequestFailedError(profileError)) {
+              noteNetworkFailure('group_roster_profiles', profileError);
+            } else {
+              console.log('Error fetching roster profiles:', profileError);
+            }
           } else {
             profileRows.forEach((row) => {
               profileMap[row.id] = mapProfileSummary(row);
@@ -3523,7 +3662,7 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
       setGroups(mapped);
       return mapped;
     },
-    [authUser?.id]
+    [authUser?.id, noteNetworkFailure, noteNetworkSuccess, shouldSkipNetworkRequests]
   );
 
   const fetchGroupInvites = useCallback(
@@ -7306,6 +7445,8 @@ const TASK_SELECT_VARIANTS_LEGACY_GROUP_CATEGORY =
   TASK_SELECT_VARIANTS_LEGACY_GROUP.map(withTaskCategoryField);
 
 const fetchTasksFromSupabase = async (userId) => {
+  if (shouldSkipNetworkRequests()) return;
+
   const buildQuery = (table, selectFields) =>
     supabase
       .from(table)
@@ -7414,9 +7555,14 @@ const fetchTasksFromSupabase = async (userId) => {
   }
 
   if (error) {
-    console.log('Error fetching tasks:', error);
+    if (isNetworkRequestFailedError(error)) {
+      noteNetworkFailure('tasks', error);
+    } else {
+      console.log('Error fetching tasks:', error);
+    }
     return;
   }
+  noteNetworkSuccess();
 
   seedNotificationCacheFromRows('task', data || []);
 
@@ -7460,10 +7606,18 @@ const fetchTasksFromSupabase = async (userId) => {
           sharedTaskId: linkMap[task.id] || task.sharedTaskId,
         }));
       } else if (linkError && !isMissingRelationError(linkError, 'task_participants')) {
-        console.log('Error fetching task participant links:', linkError);
+        if (isNetworkRequestFailedError(linkError)) {
+          noteNetworkFailure('task_participant_links', linkError);
+        } else {
+          console.log('Error fetching task participant links:', linkError);
+        }
       }
     } catch (err) {
-      console.log('Error enriching tasks with participant links:', err);
+      if (isNetworkRequestFailedError(err)) {
+        noteNetworkFailure('task_participant_links_exception', err);
+      } else {
+        console.log('Error enriching tasks with participant links:', err);
+      }
     }
   }
 
@@ -12105,6 +12259,7 @@ const mapProfileRow = (row) => {
 
   const fetchProfileFromSupabase = async (userId) => {
     if (!userId) return null;
+    if (shouldSkipNetworkRequests()) return null;
 
     const fetchByColumn = async (column) => {
       const selectableColumns = [
@@ -12231,6 +12386,10 @@ const mapProfileRow = (row) => {
     row = pickBestProfileRow([byIdRow, byUserIdRow]);
 
     if (!row && lastError) {
+      if (isNetworkRequestFailedError(lastError)) {
+        noteNetworkFailure('profile', lastError);
+        return null;
+      }
       console.log('Error fetching profile:', lastError);
     }
 
@@ -12247,6 +12406,7 @@ const mapProfileRow = (row) => {
     }
 
     if (row) {
+      noteNetworkSuccess();
       const mapped = mapProfileRow(row);
       setProfile(mapped);
       setHasOnboarded(!!row.has_onboarded);

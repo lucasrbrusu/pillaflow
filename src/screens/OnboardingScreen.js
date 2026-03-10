@@ -238,9 +238,14 @@ const OnboardingScreen = ({ navigation }) => {
                 onPress={handleSwipeBack}
                 activeOpacity={0.85}
               >
-                <LinearGradient colors={onboardingTheme.buttonGradient} style={styles.backButtonInner}>
+                <View
+                  style={[
+                    styles.backButtonInner,
+                    { backgroundColor: onboardingTheme.buttonGradient[0] },
+                  ]}
+                >
                   <Ionicons name="arrow-back" size={18} color="#FFFFFF" />
-                </LinearGradient>
+                </View>
               </TouchableOpacity>
             )}
             <View style={styles.badgeRow}>
@@ -336,10 +341,12 @@ const OnboardingScreen = ({ navigation }) => {
             <View style={styles.pageIndicator}>
               {[0, 1].map((index) =>
                 index === step ? (
-                  <LinearGradient
+                  <View
                     key={`dot-${index}`}
-                    colors={onboardingTheme.buttonGradient}
-                    style={styles.indicatorActive}
+                    style={[
+                      styles.indicatorActive,
+                      { backgroundColor: onboardingTheme.buttonGradient[0] },
+                    ]}
                   />
                 ) : (
                   <View
@@ -354,10 +361,15 @@ const OnboardingScreen = ({ navigation }) => {
             </View>
 
             <TouchableOpacity style={styles.ctaButton} onPress={handleNext} activeOpacity={0.85}>
-              <LinearGradient colors={onboardingTheme.buttonGradient} style={styles.ctaGradient}>
+              <View
+                style={[
+                  styles.ctaContent,
+                  { backgroundColor: onboardingTheme.buttonGradient[0] },
+                ]}
+              >
                 <Text style={styles.ctaText}>{step === 0 ? 'Next' : 'Get Started'}</Text>
                 <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={styles.ctaIcon} />
-              </LinearGradient>
+              </View>
             </TouchableOpacity>
 
             <View style={styles.legalLinksContainer}>
@@ -387,8 +399,8 @@ const createStyles = (themeColorsParam = colors) => {
     android: 'sans-serif-condensed',
   });
   const heroFont = Platform.select({
-    ios: 'AvenirNext-Bold',
-    android: 'sans-serif-condensed',
+    ios: 'AvenirNext-DemiBold',
+    android: 'sans-serif-medium',
   });
 
   return StyleSheet.create({
@@ -461,7 +473,7 @@ const createStyles = (themeColorsParam = colors) => {
     },
     logoTitle: {
       fontSize: 32,
-      fontWeight: '800',
+      fontWeight: '700',
       color: baseText,
       fontFamily: displayFont,
     },
@@ -504,7 +516,7 @@ const createStyles = (themeColorsParam = colors) => {
     },
     heroTitle: {
       fontSize: 28,
-      fontWeight: '800',
+      fontWeight: '700',
       color: baseText,
       textAlign: 'center',
       marginBottom: spacing.sm,
@@ -569,10 +581,10 @@ const createStyles = (themeColorsParam = colors) => {
       marginHorizontal: 4,
     },
     ctaButton: {
-      borderRadius: borderRadius.full,
+      borderRadius: borderRadius.md,
       overflow: 'hidden',
     },
-    ctaGradient: {
+    ctaContent: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',

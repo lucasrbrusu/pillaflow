@@ -19,6 +19,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.pillaflow.app",
       "infoPlist": {
+        "UIBackgroundModes": [
+          "fetch"
+        ],
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Pillaflow uses the camera to let you scan/attach photos within the app.",
         "NSPhotoLibraryUsageDescription": "Pillaflow uses the library of the user to attach an image for profile appearance",

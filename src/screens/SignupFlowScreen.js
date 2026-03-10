@@ -1215,7 +1215,12 @@ const SignupFlowScreen = ({ navigation }) => {
                     disabled={isCtaDisabled}
                     activeOpacity={0.95}
                   >
-                    <LinearGradient colors={signupTheme.buttonGradient} style={styles.ctaGradient}>
+                    <View
+                      style={[
+                        styles.ctaContent,
+                        { backgroundColor: signupTheme.buttonGradient[0] },
+                      ]}
+                    >
                       <Animated.View
                         pointerEvents="none"
                         style={[styles.holdFill, { width: holdFillWidth }]}
@@ -1233,7 +1238,7 @@ const SignupFlowScreen = ({ navigation }) => {
                           />
                         </>
                       )}
-                    </LinearGradient>
+                    </View>
                   </TouchableOpacity>
                   {!isSubmitting && (
                     <Text style={styles.holdHintText}>
@@ -1248,7 +1253,12 @@ const SignupFlowScreen = ({ navigation }) => {
                   disabled={isCtaDisabled}
                   activeOpacity={0.85}
                 >
-                  <LinearGradient colors={signupTheme.buttonGradient} style={styles.ctaGradient}>
+                  <View
+                    style={[
+                      styles.ctaContent,
+                      { backgroundColor: signupTheme.buttonGradient[0] },
+                    ]}
+                  >
                     {isSubmitting ? (
                       <ActivityIndicator color="#FFFFFF" />
                     ) : (
@@ -1262,7 +1272,7 @@ const SignupFlowScreen = ({ navigation }) => {
                         />
                       </>
                     )}
-                  </LinearGradient>
+                  </View>
                 </TouchableOpacity>
               )}
             </View>
@@ -1379,7 +1389,7 @@ const createStyles = (themeColorsParam = colors) => {
     },
     logoTitle: {
       fontSize: 30,
-      fontWeight: '800',
+      fontWeight: '700',
       color: baseText,
       fontFamily: displayFont,
     },
@@ -1892,7 +1902,7 @@ const createStyles = (themeColorsParam = colors) => {
     ctaDisabled: {
       opacity: 0.6,
     },
-    ctaGradient: {
+    ctaContent: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
