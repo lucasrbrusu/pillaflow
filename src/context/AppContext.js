@@ -14642,11 +14642,17 @@ const mapProfileRow = (row) => {
       }
 
       const registration = await registerHealthMetricsBackgroundTask();
+      const silentSkipReasons = new Set([
+        'background_runtime_unavailable',
+        'task_manager_unavailable',
+        'background_fetch_not_configured',
+        'background_fetch_unavailable_in_expo_go',
+      ]);
       if (
         registration &&
         !registration.registered &&
         registration.reason &&
-        registration.reason !== 'background_runtime_unavailable'
+        !silentSkipReasons.has(registration.reason)
       ) {
         console.log(
           'Health background task registration skipped:',

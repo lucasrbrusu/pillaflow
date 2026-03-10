@@ -95,6 +95,26 @@ const isBackgroundFetchDenied = (status) => {
   );
 };
 
+const getErrorText = (error) =>
+  `${error?.message || ''} ${error?.cause?.message || ''} ${error?.stack || ''}`.toLowerCase();
+
+const isBackgroundFetchNotConfiguredError = (error) => {
+  const message = getErrorText(error);
+  return (
+    message.includes('background fetch has not been configured') ||
+    message.includes('add `fetch` to `uibackgroundmodes`') ||
+    message.includes('uibackgroundmodes')
+  );
+};
+
+const isBackgroundFetchUnavailableInExpoGoError = (error) => {
+  const message = getErrorText(error);
+  return (
+    message.includes('expo go') &&
+    (message.includes('background fetch') || message.includes('registertaskasync'))
+  );
+};
+
 export const syncHealthMetricsSnapshotForUser = async ({
   userId,
   force = false,
@@ -249,6 +269,12 @@ export const registerHealthMetricsBackgroundTask = async () => {
 
     return { registered: true };
   } catch (error) {
+    if (isBackgroundFetchNotConfiguredError(error)) {
+      return { registered: false, reason: 'background_fetch_not_configured' };
+    }
+    if (isBackgroundFetchUnavailableInExpoGoError(error)) {
+      return { registered: false, reason: 'background_fetch_unavailable_in_expo_go' };
+    }
     console.log('Error registering health background sync task:', error);
     return {
       registered: false,
