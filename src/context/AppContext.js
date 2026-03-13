@@ -107,6 +107,7 @@ const defaultProfile = {
   updatedAt: null,
   dailyCalorieGoal: 2000,
   preferredDailyCalorieGoal: 2000,
+  dailyStepsGoal: null,
   dailyWaterGoal: 2,
   dailySleepGoal: 8,
   weightManagerUnit: 'kg',
@@ -216,6 +217,11 @@ const deriveNutritionTotalsFromFoods = (day = {}) => {
 const toPositiveGoalOrNull = (value) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const toRoundedPositiveIntOrNull = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
 };
 
 const getActiveJourneyNutritionGoals = (profileValue = null) => ({
@@ -1533,6 +1539,9 @@ const profileBadgeColumnSupportRef = useRef({
   badge_slot_3: true,
   badge_slots: true,
 });
+const profileGoalColumnSupportRef = useRef({
+  daily_steps_goal: true,
+});
 const profileAchievementUnlockColumnSupportRef = useRef({
   achievement_unlocks: true,
 });
@@ -2603,6 +2612,7 @@ const mapExternalProfile = (row) => ({
   email: row?.email || '',
   avatarUrl: getAvatarPublicUrl(row?.photo || row?.avatar_url || row?.avatar) || null,
   dailyCalorieGoal: row?.daily_calorie_goal ?? null,
+  dailyStepsGoal: toRoundedPositiveIntOrNull(row?.daily_steps_goal ?? row?.dailyStepsGoal),
   dailyWaterGoal: row?.daily_water_goal ?? null,
   dailySleepGoal: row?.daily_sleep_goal ?? null,
   plan: row?.plan || defaultProfile.plan,
@@ -4874,7 +4884,7 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
 
   const toggleGroupHabitCompletion = useCallback(
     async (habitId, options = {}) => {
-      if (!authUser?.id || !habitId) return;
+      if (!authUser?.id || !habitId) return false;
       const providedDate = normalizeDateKey(options?.dateISO);
       const targetDateISO = providedDate || toLocalDateISO(new Date());
       const amountOverride =
@@ -4894,6 +4904,26 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
           : existing
           ? 0
           : Math.max(1, Number(groupHabit?.goalValue) || 1);
+      const previousCompletionsForHabit = [...completions];
+      const nextCompletionsForHabit =
+        nextAmount <= 0
+          ? previousCompletionsForHabit.filter(
+              (c) => !(c.userId === authUser.id && normalizeDateKey(c.date) === targetDateISO)
+            )
+          : [
+              ...previousCompletionsForHabit.filter(
+                (c) => !(c.userId === authUser.id && normalizeDateKey(c.date) === targetDateISO)
+              ),
+              { habitId, userId: authUser.id, date: targetDateISO, amount: nextAmount },
+            ];
+      const applyLocalGroupCompletions = (nextList) => {
+        setGroupHabitCompletions((prev) => ({
+          ...(prev || {}),
+          [habitId]: nextList,
+        }));
+      };
+
+      applyLocalGroupCompletions(nextCompletionsForHabit);
 
       if (nextAmount <= 0) {
         const { error } = await supabase
@@ -4905,25 +4935,16 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
 
         if (error) {
           console.log('Error removing group habit completion:', error);
-          return;
+          applyLocalGroupCompletions(previousCompletionsForHabit);
+          return false;
         }
-
-        setGroupHabitCompletions((prev) => {
-          const list = prev[habitId] || [];
-          return {
-            ...prev,
-            [habitId]: list.filter(
-              (c) => !(c.userId === authUser.id && normalizeDateKey(c.date) === targetDateISO)
-            ),
-          };
-        });
 
         if (shouldSyncSourceHabit && groupHabit?.sourceHabitId) {
           await setHabitProgress(groupHabit.sourceHabitId, 0, targetDateISO, {
             syncLinkedGroupHabits: false,
           });
         }
-        return;
+        return true;
       }
 
       await supabase
@@ -4945,24 +4966,16 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
 
       if (error) {
         console.log('Error adding group habit completion:', error);
-        return;
+        applyLocalGroupCompletions(previousCompletionsForHabit);
+        return false;
       }
-
-      setGroupHabitCompletions((prev) => {
-        const list = (prev[habitId] || []).filter(
-          (c) => !(c.userId === authUser.id && normalizeDateKey(c.date) === targetDateISO)
-        );
-        return {
-          ...prev,
-          [habitId]: [...list, { habitId, userId: authUser.id, date: targetDateISO, amount: nextAmount }],
-        };
-      });
 
       if (shouldSyncSourceHabit && groupHabit?.sourceHabitId) {
         await setHabitProgress(groupHabit.sourceHabitId, nextAmount, targetDateISO, {
           syncLinkedGroupHabits: false,
         });
       }
+      return true;
     },
     [authUser?.id, groupHabitCompletions, groupHabits, habits]
   );
@@ -6454,6 +6467,7 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
         'avatar_url',
         'photo',
         'daily_calorie_goal',
+        ...(profileGoalColumnSupportRef.current.daily_steps_goal ? ['daily_steps_goal'] : []),
         'daily_water_goal',
         'daily_sleep_goal',
         'weight_manager_unit',
@@ -6494,6 +6508,9 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
           if (!missingColumn) {
             lastError = error;
             break;
+          }
+          if (Object.prototype.hasOwnProperty.call(profileGoalColumnSupportRef.current, missingColumn)) {
+            profileGoalColumnSupportRef.current[missingColumn] = false;
           }
           const nextColumns = selectedColumns.filter(
             (columnName) => columnName.toLowerCase() !== missingColumn
@@ -7155,7 +7172,7 @@ const toggleHabitCompletion = async (habitId) => {
 };
 
 const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {}) => {
-  if (!authUser?.id || !habitId) return;
+  if (!authUser?.id || !habitId) return false;
 
   const dateValue = normalizeDateKey(dateISO) || toLocalDateISO(new Date());
   const dateKey = toLocalDateKey(dateValue);
@@ -7163,7 +7180,8 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
   const syncLinkedGroupHabits = options?.syncLinkedGroupHabits !== false;
   const numericAmount = Math.max(0, Number(amount) || 0);
   const habit = habits.find((item) => item.id === habitId);
-  if (!habit) return;
+  if (!habit) return false;
+
   const goalValue = Math.max(Number(habit.goalValue) || 1, 1);
   const quitHabit = isQuitHabit(habit);
   const shouldComplete = quitHabit
@@ -7175,6 +7193,137 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
   const wasCompletedOnTargetDate = quitHabit
     ? isQuitAmountCompleted(existingAmountOnDate, goalValue)
     : (habit.completedDates || []).includes(dateKey);
+
+  const nextCompletedDates = (() => {
+    const current = Array.isArray(habit.completedDates) ? [...habit.completedDates] : [];
+    if (shouldComplete && !current.includes(dateKey)) return [...current, dateKey];
+    if (!shouldComplete && current.includes(dateKey)) {
+      return current.filter((value) => value !== dateKey);
+    }
+    return current;
+  })();
+  const nextProgressByDate = {
+    ...(habit.progressByDate || {}),
+    [dateKey]: numericAmount,
+  };
+  const shouldPreserveFrozenStreak =
+    !lifecycleCompletedAtTargetDate &&
+    streakFrozen &&
+    isTargetToday &&
+    shouldComplete &&
+    !wasCompletedOnTargetDate;
+  const computedNextStreak = computeHabitStreak(
+    {
+      ...habit,
+      completedDates: nextCompletedDates,
+      progressByDate: nextProgressByDate,
+    },
+    {
+      completedDates: nextCompletedDates,
+      progressByDate: nextProgressByDate,
+    }
+  );
+  const nextStreak = shouldPreserveFrozenStreak
+    ? Math.max(computedNextStreak, (habit.streak || 0) + 1)
+    : computedNextStreak;
+
+  const previousHabitsSnapshot = Array.isArray(habits) ? habits : [];
+  const previousCurrentStreakState = normalizeCurrentStreakState(currentStreakState);
+  const targetDayNumber = toUtcDayNumberFromLocalDay(dateValue);
+  const buildUpdatedHabitForSnapshot = (item) => {
+    if (item.id !== habitId) return item;
+    let itemCompletedDates = item.completedDates || [];
+    if (shouldComplete && !itemCompletedDates.includes(dateKey)) {
+      itemCompletedDates = [...itemCompletedDates, dateKey];
+    }
+    if (!shouldComplete && itemCompletedDates.includes(dateKey)) {
+      itemCompletedDates = itemCompletedDates.filter((value) => value !== dateKey);
+    }
+    const itemNextProgressByDate = {
+      ...(item.progressByDate || {}),
+      [dateKey]: numericAmount,
+    };
+    const itemComputedStreak = computeHabitStreak(
+      {
+        ...item,
+        completedDates: itemCompletedDates,
+        progressByDate: itemNextProgressByDate,
+      },
+      {
+        completedDates: itemCompletedDates,
+        progressByDate: itemNextProgressByDate,
+      }
+    );
+
+    return {
+      ...item,
+      completedDates: itemCompletedDates,
+      streak: shouldPreserveFrozenStreak
+        ? Math.max(itemComputedStreak, (item.streak || 0) + 1)
+        : itemComputedStreak,
+      progressByDate: itemNextProgressByDate,
+    };
+  };
+  const nextHabitsSnapshot = previousHabitsSnapshot.map(buildUpdatedHabitForSnapshot);
+  const shouldResumeFrozenCurrentStreak =
+    streakFrozen &&
+    isTargetToday &&
+    shouldComplete &&
+    !wasCompletedOnTargetDate;
+  const computedCurrentStreakState = buildCurrentStreakStateFromHabits(
+    nextHabitsSnapshot,
+    new Date()
+  );
+  const nextCurrentStreakState = shouldResumeFrozenCurrentStreak
+    ? normalizeCurrentStreakState({
+        streak: Math.max(
+          computedCurrentStreakState.streak,
+          previousCurrentStreakState.streak,
+          previousCurrentStreakState.streak +
+            (previousCurrentStreakState.lastCompletionDayNumber === targetDayNumber ? 0 : 1)
+        ),
+        lastCompletionDayNumber: Number.isFinite(targetDayNumber)
+          ? targetDayNumber
+          : computedCurrentStreakState.lastCompletionDayNumber,
+      })
+    : computedCurrentStreakState;
+  const shouldPersistNextCurrentStreakState =
+    nextCurrentStreakState.streak !== previousCurrentStreakState.streak ||
+    nextCurrentStreakState.lastCompletionDayNumber !==
+      previousCurrentStreakState.lastCompletionDayNumber;
+  const shouldShowCurrentStreakNotice =
+    isTargetToday &&
+    shouldComplete &&
+    !wasCompletedOnTargetDate &&
+    nextCurrentStreakState?.streak > previousCurrentStreakState.streak;
+
+  setHabits((prev) => (prev || []).map(buildUpdatedHabitForSnapshot));
+  if (shouldPersistNextCurrentStreakState) {
+    setCurrentStreakState((prev) => {
+      if (
+        prev?.streak === nextCurrentStreakState.streak &&
+        prev?.lastCompletionDayNumber === nextCurrentStreakState.lastCompletionDayNumber
+      ) {
+        return prev;
+      }
+      return nextCurrentStreakState;
+    });
+  }
+
+  const rollbackOptimisticHabitProgress = () => {
+    setHabits(previousHabitsSnapshot);
+    if (shouldPersistNextCurrentStreakState) {
+      setCurrentStreakState((prev) => {
+        if (
+          prev?.streak === previousCurrentStreakState.streak &&
+          prev?.lastCompletionDayNumber === previousCurrentStreakState.lastCompletionDayNumber
+        ) {
+          return prev;
+        }
+        return previousCurrentStreakState;
+      });
+    }
+  };
 
   const isOnConflictTargetError = (error) => {
     if (!error) return false;
@@ -7241,7 +7390,8 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
       combined.includes('habit_completions_habit_id_date_key');
     if (!legacyUniqueConflict) {
       console.log('Error setting habit progress:', completionWriteError);
-      return;
+      rollbackOptimisticHabitProgress();
+      return false;
     }
 
     // Legacy schema fallback: if the user's row already exists for that day,
@@ -7261,7 +7411,8 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
         'Error setting habit progress: habit_completions must be unique by (habit_id, user_id, date). Run supabase/habit-completions-integrity.sql.',
         completionWriteError
       );
-      return;
+      rollbackOptimisticHabitProgress();
+      return false;
     }
 
     // Best effort: keep amount accurate when the column exists.
@@ -7279,121 +7430,25 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
     }
   }
 
-  const nextCompletedDates = (() => {
-    const current = Array.isArray(habit.completedDates) ? [...habit.completedDates] : [];
-    if (shouldComplete && !current.includes(dateKey)) return [...current, dateKey];
-    if (!shouldComplete && current.includes(dateKey)) {
-      return current.filter((value) => value !== dateKey);
-    }
-    return current;
-  })();
-  const nextProgressByDate = {
-    ...(habit.progressByDate || {}),
-    [dateKey]: numericAmount,
-  };
-  const shouldPreserveFrozenStreak =
-    !lifecycleCompletedAtTargetDate &&
-    streakFrozen &&
-    isTargetToday &&
-    shouldComplete &&
-    !wasCompletedOnTargetDate;
-  const computedNextStreak = computeHabitStreak(
-    {
-      ...habit,
-      completedDates: nextCompletedDates,
-      progressByDate: nextProgressByDate,
-    },
-    {
-      completedDates: nextCompletedDates,
-      progressByDate: nextProgressByDate,
-    }
-  );
-  const nextStreak = shouldPreserveFrozenStreak
-    ? Math.max(computedNextStreak, (habit.streak || 0) + 1)
-    : computedNextStreak;
-
-  const targetDayNumber = toUtcDayNumberFromLocalDay(dateValue);
-  const buildUpdatedHabitForSnapshot = (item) => {
-    if (item.id !== habitId) return item;
-    let itemCompletedDates = item.completedDates || [];
-    if (shouldComplete && !itemCompletedDates.includes(dateKey)) {
-      itemCompletedDates = [...itemCompletedDates, dateKey];
-    }
-    if (!shouldComplete && itemCompletedDates.includes(dateKey)) {
-      itemCompletedDates = itemCompletedDates.filter((value) => value !== dateKey);
-    }
-    const itemNextProgressByDate = {
-      ...(item.progressByDate || {}),
-      [dateKey]: numericAmount,
-    };
-    const itemComputedStreak = computeHabitStreak(
-      {
-        ...item,
-        completedDates: itemCompletedDates,
-        progressByDate: itemNextProgressByDate,
-      },
-      {
-        completedDates: itemCompletedDates,
-        progressByDate: itemNextProgressByDate,
-      }
-    );
-
-    return {
-      ...item,
-      completedDates: itemCompletedDates,
-      streak: shouldPreserveFrozenStreak
-        ? Math.max(
-            itemComputedStreak,
-            (item.streak || 0) + 1
-          )
-        : itemComputedStreak,
-      progressByDate: itemNextProgressByDate,
-    };
-  };
-  const nextHabitsSnapshot = (habits || []).map(buildUpdatedHabitForSnapshot);
-  setHabits((prev) => (prev || []).map(buildUpdatedHabitForSnapshot));
-
-  const shouldResumeFrozenCurrentStreak =
-    streakFrozen &&
-    isTargetToday &&
-    shouldComplete &&
-    !wasCompletedOnTargetDate;
-  const computedCurrentStreakState = buildCurrentStreakStateFromHabits(nextHabitsSnapshot, new Date());
-  const previousCurrentStreak = Math.max(0, Number(currentStreakState?.streak) || 0);
-  const nextCurrentStreakState = shouldResumeFrozenCurrentStreak
-    ? normalizeCurrentStreakState({
-        streak: Math.max(
-          computedCurrentStreakState.streak,
-          previousCurrentStreak,
-          previousCurrentStreak +
-            (currentStreakState?.lastCompletionDayNumber === targetDayNumber ? 0 : 1)
-        ),
-        lastCompletionDayNumber: Number.isFinite(targetDayNumber)
-          ? targetDayNumber
-          : computedCurrentStreakState.lastCompletionDayNumber,
-      })
-    : computedCurrentStreakState;
-  if (
-    isTargetToday &&
-    shouldComplete &&
-    !wasCompletedOnTargetDate &&
-    nextCurrentStreakState?.streak > previousCurrentStreak
-  ) {
-    showCurrentStreakIncreaseNotice(nextCurrentStreakState.streak);
-  }
-
-  if (
-    nextCurrentStreakState.streak !== currentStreakState?.streak ||
-    nextCurrentStreakState.lastCompletionDayNumber !== currentStreakState?.lastCompletionDayNumber
-  ) {
-    await persistCurrentStreakState(nextCurrentStreakState);
-  }
-
-  await supabase
+  const { error: streakWriteError } = await supabase
     .from('habits')
     .update({ streak: nextStreak })
     .eq('id', habitId)
     .eq('user_id', authUser.id);
+  if (streakWriteError) {
+    console.log('Error updating habit streak:', streakWriteError);
+  }
+
+  if (shouldPersistNextCurrentStreakState) {
+    try {
+      await writeCurrentStreakState(authUser.id, nextCurrentStreakState);
+    } catch (error) {
+      console.log('Error writing current streak state:', error);
+    }
+  }
+  if (shouldShowCurrentStreakNotice) {
+    showCurrentStreakIncreaseNotice(nextCurrentStreakState.streak);
+  }
 
   if (syncLinkedGroupHabits) {
     const linkedGroupHabits = (groupHabits || []).filter(
@@ -7407,7 +7462,7 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
       });
     }
   }
-
+  return true;
 };
 
 const isHabitCompletedToday = (habitId) => {
@@ -12264,6 +12319,9 @@ const getFinanceSummaryForDate = (date) => {
 const mapProfileRow = (row) => {
   const preferredDailyCalorieGoal =
     row?.daily_calorie_goal ?? defaultProfile.dailyCalorieGoal;
+  const dailyStepsGoal = toRoundedPositiveIntOrNull(
+    row?.daily_steps_goal ?? row?.dailyStepsGoal ?? defaultProfile.dailyStepsGoal
+  );
   const weightManagerTargetCalories = asNumber(
     row?.weight_manager_target_calories,
     defaultProfile.weightManagerTargetCalories
@@ -12320,6 +12378,7 @@ const mapProfileRow = (row) => {
     updatedAt: row?.updated_at || row?.updatedAt || profile?.updatedAt || defaultProfile.updatedAt,
     dailyCalorieGoal,
     preferredDailyCalorieGoal,
+    dailyStepsGoal,
     dailyWaterGoal: row?.daily_water_goal ?? defaultProfile.dailyWaterGoal,
     dailySleepGoal: row?.daily_sleep_goal ?? defaultProfile.dailySleepGoal,
     weightManagerUnit: row?.weight_manager_unit ?? defaultProfile.weightManagerUnit,
@@ -12400,6 +12459,7 @@ const mapProfileRow = (row) => {
         'avatar_url',
         'photo',
         'daily_calorie_goal',
+        ...(profileGoalColumnSupportRef.current.daily_steps_goal ? ['daily_steps_goal'] : []),
         'daily_water_goal',
         'daily_sleep_goal',
         'weight_manager_unit',
@@ -12438,6 +12498,9 @@ const mapProfileRow = (row) => {
         if (error && isMissingColumnError(error)) {
           const missingColumn = extractMissingColumnName(error);
           if (!missingColumn) return { row: null, error };
+          if (Object.prototype.hasOwnProperty.call(profileGoalColumnSupportRef.current, missingColumn)) {
+            profileGoalColumnSupportRef.current[missingColumn] = false;
+          }
           const nextColumns = selectedColumns.filter(
             (name) => name.toLowerCase() !== missingColumn
           );
@@ -12551,6 +12614,15 @@ const mapProfileRow = (row) => {
     const userId = authUser?.id || fields.id;
     if (!userId) return null;
     const nowISO = new Date().toISOString();
+    const hasExplicitDailyStepsGoal =
+      Object.prototype.hasOwnProperty.call(fields, 'daily_steps_goal') ||
+      Object.prototype.hasOwnProperty.call(fields, 'dailyStepsGoal');
+    const explicitDailyStepsGoal = Object.prototype.hasOwnProperty.call(fields, 'daily_steps_goal')
+      ? fields.daily_steps_goal
+      : fields.dailyStepsGoal;
+    const resolvedDailyStepsGoal = hasExplicitDailyStepsGoal
+      ? toRoundedPositiveIntOrNull(explicitDailyStepsGoal)
+      : toRoundedPositiveIntOrNull(profile.dailyStepsGoal);
 
     const resolveFullName = () => {
       const candidates = [
@@ -12591,6 +12663,9 @@ const mapProfileRow = (row) => {
         fields.dailyCalorieGoal ??
         profile.preferredDailyCalorieGoal ??
         profile.dailyCalorieGoal,
+      daily_steps_goal: profileGoalColumnSupportRef.current.daily_steps_goal
+        ? resolvedDailyStepsGoal
+        : undefined,
       daily_water_goal: fields.daily_water_goal ?? fields.dailyWaterGoal ?? profile.dailyWaterGoal,
       daily_sleep_goal: fields.daily_sleep_goal ?? fields.dailySleepGoal ?? profile.dailySleepGoal,
       weight_manager_unit:
@@ -12713,15 +12788,27 @@ const mapProfileRow = (row) => {
 
     let data = null;
     let error = null;
+    let nextPayload = { ...payload };
 
-    // First try a schema that has user_id as the unique key
-    ({ data, error } = await attemptUpsert({ ...payload, user_id: userId }, 'user_id'));
+    while (Object.keys(nextPayload).length) {
+      ({ data, error } = await attemptUpsert({ ...nextPayload, user_id: userId }, 'user_id'));
 
-    // If that fails because the column is missing or not unique, fall back to the id-based schema
-    if (error) {
-      if (isMissingColumnError(error, 'user_id') || error.code === '23505') {
-        ({ data, error } = await attemptUpsert(payload, 'id'));
+      if (error && (isMissingColumnError(error, 'user_id') || error.code === '23505')) {
+        ({ data, error } = await attemptUpsert(nextPayload, 'id'));
       }
+
+      if (error && isMissingColumnError(error)) {
+        const missingColumn = extractMissingColumnName(error);
+        if (missingColumn && Object.prototype.hasOwnProperty.call(nextPayload, missingColumn)) {
+          if (Object.prototype.hasOwnProperty.call(profileGoalColumnSupportRef.current, missingColumn)) {
+            profileGoalColumnSupportRef.current[missingColumn] = false;
+          }
+          nextPayload = pruneUndefined({ ...nextPayload, [missingColumn]: undefined });
+          continue;
+        }
+      }
+
+      break;
     }
 
     if (error) {
@@ -12763,6 +12850,15 @@ const mapProfileRow = (row) => {
       return Number.isFinite(parsedPreferred) ? parsedPreferred : null;
     };
     const nextPreferredDailyCalorieGoal = resolvePreferredGoal();
+    const hasExplicitDailyStepsGoal =
+      Object.prototype.hasOwnProperty.call(updates, 'dailyStepsGoal') ||
+      Object.prototype.hasOwnProperty.call(updates, 'daily_steps_goal');
+    const explicitDailyStepsGoal = Object.prototype.hasOwnProperty.call(updates, 'daily_steps_goal')
+      ? updates.daily_steps_goal
+      : updates.dailyStepsGoal;
+    const nextDailyStepsGoal = hasExplicitDailyStepsGoal
+      ? toRoundedPositiveIntOrNull(explicitDailyStepsGoal)
+      : toRoundedPositiveIntOrNull(profile.dailyStepsGoal);
 
     let avatarUrl = merged.photo;
     if (updates.photo) {
@@ -12775,6 +12871,7 @@ const mapProfileRow = (row) => {
       photo: avatarUrl,
       avatar_url: avatarUrl,
       preferredDailyCalorieGoal: nextPreferredDailyCalorieGoal,
+      dailyStepsGoal: nextDailyStepsGoal,
       dailyCalorieGoal: hasWeightManagerGoal
         ? weightManagerTargetCaloriesValue
         : nextPreferredDailyCalorieGoal ?? merged.dailyCalorieGoal,
@@ -12796,6 +12893,7 @@ const mapProfileRow = (row) => {
       avatar_url: avatarUrl,
       photo: avatarUrl,
       dailyCalorieGoal: dailyGoalForProfile,
+      dailyStepsGoal: newLocalProfile.dailyStepsGoal,
       dailyWaterGoal: newLocalProfile.dailyWaterGoal,
       dailySleepGoal: newLocalProfile.dailySleepGoal,
       weightManagerUnit: newLocalProfile.weightManagerUnit,

@@ -604,6 +604,11 @@ const HealthScreen = () => {
     0,
     Math.round(Number(selectedHealthMetric?.steps) || 0)
   );
+  const selectedDailyStepsGoal = Math.max(0, Math.round(Number(profile?.dailyStepsGoal) || 0));
+  const selectedStepsGoalProgress =
+    selectedDailyStepsGoal > 0
+      ? Math.max(0, Math.min(999, Math.round((selectedStepsTotal / selectedDailyStepsGoal) * 100)))
+      : null;
 
   const emptyDay = {
     mood: null,
@@ -1796,8 +1801,14 @@ const HealthScreen = () => {
             {formatStepsNumber(selectedStepsTotal)}
           </Text>
           <View style={styles.logActionRow}>
-            <Text style={styles.logActionText}>Tap to view details and set your daily snapshot</Text>
-            <Text style={[styles.logPercentText, { color: themeColors.primary }]}>steps</Text>
+            <Text style={styles.logActionText}>
+              {selectedDailyStepsGoal
+                ? `Goal ${formatStepsNumber(selectedDailyStepsGoal)} steps/day`
+                : 'Tap to view details and set your daily goal'}
+            </Text>
+            <Text style={[styles.logPercentText, { color: themeColors.primary }]}>
+              {selectedDailyStepsGoal ? `${selectedStepsGoalProgress}%` : 'goal'}
+            </Text>
           </View>
         </Card>
 

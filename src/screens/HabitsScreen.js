@@ -543,7 +543,7 @@ const computeBestStreakFromDateKeys = (dateKeys = [], goalPeriod = 'day') => {
   return best;
 };
 
-const SwipeHabitCard = ({
+const SwipeHabitCard = React.memo(({
   habit,
   progress,
   ratio,
@@ -563,6 +563,7 @@ const SwipeHabitCard = ({
   onQuickAdd,
   completionMethod = 'swipe',
   onSwipeInteractionChange,
+  rowWidth,
   styles,
   palette,
 }) => {
@@ -586,8 +587,6 @@ const SwipeHabitCard = ({
   const swipeStepAmount = getHabitSwipeStepAmount(goalValue);
   const swipeStepPrecision =
     swipeStepAmount >= 1 ? 0 : Math.min(3, String(swipeStepAmount).split('.')[1]?.length || 1);
-  const { width: windowWidth } = useWindowDimensions();
-  const rowWidth = Math.max(1, windowWidth - spacing.lg * 2);
   const resolvedCompletionMethod = normalizeHabitCompletionMethod(completionMethod);
   const manualPlusEnabled = resolvedCompletionMethod === 'manual_plus';
   const canSwipeProgress = swipeGesturesEnabled && isInteractive && !achieved && !manualPlusEnabled;
@@ -604,10 +603,40 @@ const SwipeHabitCard = ({
   const fillResetTimeoutRef = useRef(null);
   const streakPopScale = useRef(new Animated.Value(1)).current;
   const previousStreakRef = useRef(Math.max(0, Number(habit?.streak) || 0));
+  const actionsOpenRef = useRef(false);
+  const canSwipeProgressRef = useRef(canSwipeProgress);
+  const canSwipeActionsRef = useRef(canSwipeActions);
+  const swipeGesturesEnabledRef = useRef(swipeGesturesEnabled);
+  const habitRef = useRef(habit);
+  const onSwipeAddRef = useRef(onSwipeAdd);
 
   useEffect(() => {
     currentAmountRef.current = Math.max(0, parseNumber(progress, 0));
   }, [progress]);
+
+  useEffect(() => {
+    actionsOpenRef.current = actionsOpen;
+  }, [actionsOpen]);
+
+  useEffect(() => {
+    canSwipeProgressRef.current = canSwipeProgress;
+  }, [canSwipeProgress]);
+
+  useEffect(() => {
+    canSwipeActionsRef.current = canSwipeActions;
+  }, [canSwipeActions]);
+
+  useEffect(() => {
+    swipeGesturesEnabledRef.current = swipeGesturesEnabled;
+  }, [swipeGesturesEnabled]);
+
+  useEffect(() => {
+    habitRef.current = habit;
+  }, [habit]);
+
+  useEffect(() => {
+    onSwipeAddRef.current = onSwipeAdd;
+  }, [onSwipeAdd]);
 
   useEffect(() => {
     const nextStreak = Math.max(0, Number(habit?.streak) || 0);
@@ -766,29 +795,71 @@ const SwipeHabitCard = ({
     clearDragFillPreview();
     translateX.stopAnimation(() => {
       translateX.setValue(0);
+      actionsOpenRef.current = false;
       setActionsOpen(false);
     });
   }, [clearDragFillPreview, setSwipeInteractionActive, swipeGesturesEnabled, translateX]);
 
-  const closeActions = useCallback(() => {
+  const closeActions = useCallback(({ immediate = false } = {}) => {
+    const finalize = () => {
+      actionsOpenRef.current = false;
+      setActionsOpen(false);
+    };
+    if (immediate) {
+      translateX.stopAnimation(() => {
+        translateX.setValue(0);
+        finalize();
+      });
+      return;
+    }
+    if (!actionsOpenRef.current) {
+      translateX.stopAnimation(() => {
+        translateX.setValue(0);
+        finalize();
+      });
+      return;
+    }
     Animated.spring(translateX, {
       toValue: 0,
       useNativeDriver: true,
       tension: 220,
       friction: 26,
       overshootClamping: true,
-    }).start(() => setActionsOpen(false));
+    }).start(finalize);
   }, [translateX]);
 
-  const openActions = useCallback(() => {
+  const openActions = useCallback(({ immediate = false } = {}) => {
+    const finalize = () => {
+      actionsOpenRef.current = true;
+      setActionsOpen(true);
+    };
+    if (immediate) {
+      translateX.stopAnimation(() => {
+        translateX.setValue(-ACTION_RAIL_WIDTH);
+        finalize();
+      });
+      return;
+    }
+    if (actionsOpenRef.current) {
+      translateX.stopAnimation(() => {
+        translateX.setValue(-ACTION_RAIL_WIDTH);
+        finalize();
+      });
+      return;
+    }
     Animated.spring(translateX, {
       toValue: -ACTION_RAIL_WIDTH,
       useNativeDriver: true,
       tension: 220,
       friction: 26,
       overshootClamping: true,
-    }).start(() => setActionsOpen(true));
+    }).start(finalize);
   }, [ACTION_RAIL_WIDTH, translateX]);
+
+  useEffect(() => {
+    if (!actionsOpenRef.current) return;
+    openActions({ immediate: true });
+  }, [ACTION_RAIL_WIDTH, openActions]);
 
   const panResponder = useMemo(
     () =>
@@ -796,38 +867,38 @@ const SwipeHabitCard = ({
         onStartShouldSetPanResponder: () => false,
         onStartShouldSetPanResponderCapture: () => false,
         onMoveShouldSetPanResponder: (_, g) => {
-          if (!swipeGesturesEnabled) return false;
-          if (!canSwipeProgress && !canSwipeActions) return false;
+          if (!swipeGesturesEnabledRef.current) return false;
+          if (!canSwipeProgressRef.current && !canSwipeActionsRef.current) return false;
           const absDx = Math.abs(g.dx);
           const absDy = Math.abs(g.dy);
           if (absDx < SWIPE_CAPTURE_DISTANCE) return false;
           if (absDx <= absDy * HORIZONTAL_INTENT_RATIO) return false;
-          if (actionsOpen && canSwipeActions) return true;
-          if (g.dx >= 0) return canSwipeProgress;
-          return canSwipeActions;
+          if (actionsOpenRef.current && canSwipeActionsRef.current) return true;
+          if (g.dx >= 0) return canSwipeProgressRef.current;
+          return canSwipeActionsRef.current;
         },
         onMoveShouldSetPanResponderCapture: (_, g) => {
-          if (!swipeGesturesEnabled) return false;
-          if (!canSwipeProgress && !canSwipeActions) return false;
+          if (!swipeGesturesEnabledRef.current) return false;
+          if (!canSwipeProgressRef.current && !canSwipeActionsRef.current) return false;
           const absDx = Math.abs(g.dx);
           const absDy = Math.abs(g.dy);
           if (absDx < SWIPE_CAPTURE_DISTANCE) return false;
           if (absDx <= absDy * HORIZONTAL_INTENT_RATIO) return false;
-          if (actionsOpen && canSwipeActions) return true;
-          if (g.dx >= 0) return canSwipeProgress;
-          return canSwipeActions;
+          if (actionsOpenRef.current && canSwipeActionsRef.current) return true;
+          if (g.dx >= 0) return canSwipeProgressRef.current;
+          return canSwipeActionsRef.current;
         },
         onPanResponderGrant: () => {
-          if (!canSwipeProgress && !canSwipeActions) return;
+          if (!canSwipeProgressRef.current && !canSwipeActionsRef.current) return;
           const startAmount = currentAmountRef.current;
           swipeStartAmountRef.current = startAmount;
-          swipeModeRef.current = actionsOpen ? 'actions' : 'idle';
+          swipeModeRef.current = actionsOpenRef.current ? 'actions' : 'idle';
           setSwipeInteractionActive(true);
         },
         onPanResponderMove: (_, g) => {
-          if (!canSwipeProgress && !canSwipeActions) return;
+          if (!canSwipeProgressRef.current && !canSwipeActionsRef.current) return;
 
-          if (actionsOpen) {
+          if (actionsOpenRef.current) {
             swipeModeRef.current = 'actions';
             clearDragFillPreview();
             if (g.dx >= 0) {
@@ -840,9 +911,9 @@ const SwipeHabitCard = ({
           }
 
           if (swipeModeRef.current === 'idle') {
-            if (g.dx >= 0 && canSwipeProgress) {
+            if (g.dx >= 0 && canSwipeProgressRef.current) {
               swipeModeRef.current = 'progress';
-            } else if (g.dx < 0 && canSwipeActions) {
+            } else if (g.dx < 0 && canSwipeActionsRef.current) {
               swipeModeRef.current = 'actions';
             } else {
               return;
@@ -850,7 +921,7 @@ const SwipeHabitCard = ({
           }
 
           if (swipeModeRef.current === 'actions') {
-            if (!canSwipeActions) return;
+            if (!canSwipeActionsRef.current) return;
             clearDragFillPreview();
             const lockedDx = Math.min(0, g.dx);
             const dampedDx = lockedDx * ACTION_DRAG_DAMPING;
@@ -858,7 +929,7 @@ const SwipeHabitCard = ({
             return;
           }
 
-          if (swipeModeRef.current !== 'progress' || !canSwipeProgress) return;
+          if (swipeModeRef.current !== 'progress' || !canSwipeProgressRef.current) return;
           const lockedDx = Math.max(0, g.dx);
           translateX.setValue(0);
           setDragFillPreview(getSwipePreviewRatio(lockedDx, swipeStartAmountRef.current));
@@ -867,13 +938,13 @@ const SwipeHabitCard = ({
           const swipeMode = swipeModeRef.current;
           swipeModeRef.current = 'idle';
           setSwipeInteractionActive(false);
-          if (!canSwipeProgress && !canSwipeActions) {
+          if (!canSwipeProgressRef.current && !canSwipeActionsRef.current) {
             clearDragFillPreview();
             closeActions();
             return;
           }
 
-          if (actionsOpen) {
+          if (actionsOpenRef.current) {
             clearDragFillPreview();
             const shouldClose = g.dx > ACTION_CLOSE_DISTANCE || g.vx > ACTION_CLOSE_VELOCITY;
             if (shouldClose) {
@@ -885,7 +956,7 @@ const SwipeHabitCard = ({
           }
 
           if (swipeMode === 'actions' || g.dx < 0) {
-            if (!canSwipeActions) {
+            if (!canSwipeActionsRef.current) {
               clearDragFillPreview();
               closeActions();
               return;
@@ -901,7 +972,11 @@ const SwipeHabitCard = ({
             return;
           }
 
-          if (swipeMode === 'progress' && g.dx >= PROGRESS_COMMIT_DISTANCE && canSwipeProgress) {
+          if (
+            swipeMode === 'progress' &&
+            g.dx >= PROGRESS_COMMIT_DISTANCE &&
+            canSwipeProgressRef.current
+          ) {
             const nextAmount = getSwipeTargetAmount(g.dx, swipeStartAmountRef.current);
             const amountDelta = nextAmount - swipeStartAmountRef.current;
             if (amountDelta < swipeStepAmount) {
@@ -916,7 +991,7 @@ const SwipeHabitCard = ({
             }
             const targetRatio = goalValue > 0 ? clamp(nextAmount / goalValue, 0, 1) : 0;
             setDragFillPreview(targetRatio, { instant: true });
-            onSwipeAdd(habit, nextAmount);
+            onSwipeAddRef.current?.(habitRef.current, nextAmount);
             clearDragFillPreview({ deferMs: 120 });
             closeActions();
             return;
@@ -929,7 +1004,7 @@ const SwipeHabitCard = ({
           swipeModeRef.current = 'idle';
           setSwipeInteractionActive(false);
           clearDragFillPreview();
-          if (actionsOpen) {
+          if (actionsOpenRef.current) {
             openActions();
           } else {
             closeActions();
@@ -948,22 +1023,15 @@ const SwipeHabitCard = ({
       HORIZONTAL_INTENT_RATIO,
       PROGRESS_COMMIT_DISTANCE,
       SWIPE_CAPTURE_DISTANCE,
-      actionsOpen,
-      canSwipeActions,
-      canSwipeProgress,
       clearDragFillPreview,
       closeActions,
-      dragFillRatioRef,
       goalValue,
       getSwipeTargetAmount,
       getSwipePreviewRatio,
-      habit,
-      onSwipeAdd,
-      setSwipeInteractionActive,
       openActions,
       setDragFillPreview,
-      swipeGesturesEnabled,
       swipeStepAmount,
+      setSwipeInteractionActive,
       translateX,
     ]
   );
@@ -1222,7 +1290,9 @@ const SwipeHabitCard = ({
       </Animated.View>
     </View>
   );
-};
+});
+
+SwipeHabitCard.displayName = 'SwipeHabitCard';
 
 const HabitsScreen = () => {
   const insets = useSafeAreaInsets();
@@ -1344,6 +1414,7 @@ const HabitsScreen = () => {
   const addTypeMenuAnim = useRef(new Animated.Value(0)).current;
   const handledCreateRequestKeyRef = useRef(null);
   const handledGroupDetailRequestKeyRef = useRef(null);
+  const localProgressMapRef = useRef(localProgressMap);
 
   const [showGoalPeriodSheet, setShowGoalPeriodSheet] = useState(false);
   const [showTaskDaysSheet, setShowTaskDaysSheet] = useState(false);
@@ -1407,6 +1478,11 @@ const HabitsScreen = () => {
     return toISODate(addDays(parsedStartDate, parsedQuitGoalDays - 1));
   }, [habitType, parsedQuitGoalDays, parsedStartDate]);
   const parsedEndDate = parseDateOnly(endDate);
+  const habitRowWidth = useMemo(() => Math.max(1, windowWidth - spacing.lg * 2), [windowWidth]);
+
+  useEffect(() => {
+    localProgressMapRef.current = localProgressMap;
+  }, [localProgressMap]);
 
   const habitsWithDefaults = useMemo(() => (habits || []).map(withDefaults), [habits]);
   const sourceHabitsById = useMemo(
@@ -1975,37 +2051,64 @@ const HabitsScreen = () => {
     setShowFormModal(true);
   };
 
-  const applyProgress = async (habit, amountValue) => {
-    if (isHabitsInteractionLocked) return;
-    if (hasHabitReachedEndDate(habit, new Date())) return;
-    const amount = Math.max(0, parseNumber(amountValue, 0));
-    const localKey = `${habit.id}|${selectedDateKey}`;
-    setLocalProgressMap((prev) => ({ ...prev, [localKey]: amount }));
+  const applyProgress = useCallback(
+    async (habit, amountValue) => {
+      if (isHabitsInteractionLocked) return;
+      if (hasHabitReachedEndDate(habit, new Date())) return;
+      const amount = Math.max(0, parseNumber(amountValue, 0));
+      const localKey = `${habit.id}|${selectedDateKey}`;
+      setLocalProgressMap((prev) => ({ ...prev, [localKey]: amount }));
+      const clearLocalProgressOverride = (expectedAmount) => {
+        setLocalProgressMap((prev) => {
+          if (!Object.prototype.hasOwnProperty.call(prev, localKey)) return prev;
+          if (parseNumber(prev[localKey], 0) !== expectedAmount) return prev;
+          const next = { ...prev };
+          delete next[localKey];
+          return next;
+        });
+      };
 
-    if (habit?.__isGroupHabit) {
-      if (!isSelectedDateToday) return;
-      const todayISO = toISODate(selectedDate);
-      await toggleGroupHabitCompletion(habit.id, {
-        amount,
-        dateISO: todayISO,
-      });
-      return;
-    }
+      try {
+        if (habit?.__isGroupHabit) {
+          if (!isSelectedDateToday) return false;
+          const todayISO = toISODate(selectedDate);
+          const updated = await toggleGroupHabitCompletion(habit.id, {
+            amount,
+            dateISO: todayISO,
+          });
+          return updated !== false;
+        }
 
-    if (typeof setHabitProgress === 'function' && isSelectedDateToday) {
-      await setHabitProgress(habit.id, amount, selectedDateISO);
-      return;
-    }
+        if (typeof setHabitProgress === 'function' && isSelectedDateToday) {
+          const updated = await setHabitProgress(habit.id, amount, selectedDateISO);
+          return updated !== false;
+        }
 
-    const nowCompleted = isHabitCompletedToday(habit.id);
-    const shouldBeCompleted =
-      (habit.habitType || 'build') === 'quit'
-        ? amount <= getGoalValue(habit)
-        : amount >= getGoalValue(habit);
-    if (isSelectedDateToday && nowCompleted !== shouldBeCompleted) {
-      await toggleHabitCompletion(habit.id);
-    }
-  };
+        const nowCompleted = isHabitCompletedToday(habit.id);
+        const shouldBeCompleted =
+          (habit.habitType || 'build') === 'quit'
+            ? amount <= getGoalValue(habit)
+            : amount >= getGoalValue(habit);
+        if (isSelectedDateToday && nowCompleted !== shouldBeCompleted) {
+          await toggleHabitCompletion(habit.id);
+        }
+        return true;
+      } finally {
+        clearLocalProgressOverride(amount);
+      }
+    },
+    [
+      isHabitsInteractionLocked,
+      isHabitCompletedToday,
+      isSelectedDateToday,
+      selectedDate,
+      selectedDateISO,
+      selectedDateKey,
+      setHabitProgress,
+      toggleGroupHabitCompletion,
+      toggleHabitCompletion,
+    ]
+  );
 
   const handleQuickAddProgress = useCallback(
     async (habit) => {
@@ -2014,7 +2117,7 @@ const HabitsScreen = () => {
 
       const currentAmount = Math.max(
         0,
-        getDateProgressAmount(habit, selectedDateKey, localProgressMap)
+        getDateProgressAmount(habit, selectedDateKey, localProgressMapRef.current)
       );
       const goalValue = getGoalValue(habit);
       const stepAmount = getHabitSwipeStepAmount(goalValue);
@@ -2030,7 +2133,7 @@ const HabitsScreen = () => {
       if (nextAmount <= currentAmount) return;
       await applyProgress(habit, nextAmount);
     },
-    [applyProgress, isSelectedDateToday, isHabitsInteractionLocked, localProgressMap, selectedDateKey]
+    [applyProgress, isSelectedDateToday, isHabitsInteractionLocked, selectedDateKey]
   );
 
   const submitManualAmount = async () => {
@@ -2341,33 +2444,115 @@ const HabitsScreen = () => {
     }
   };
 
-  const removeHabitByItem = async (habitToRemove, { closeDetail = false } = {}) => {
-    if (!habitToRemove) return;
-    try {
-      if (habitToRemove.__isGroupHabit) {
-        await deleteGroupHabit(habitToRemove.id);
+  const removeHabitByItem = useCallback(
+    async (habitToRemove, { closeDetail = false } = {}) => {
+      if (!habitToRemove) return;
+      try {
+        if (habitToRemove.__isGroupHabit) {
+          await deleteGroupHabit(habitToRemove.id);
+          if (closeDetail) setShowDetailModal(false);
+          setActiveGroupHabitId((prev) => (prev === habitToRemove.id ? null : prev));
+          setActiveGroupHabitGroupId((prev) =>
+            prev === (habitToRemove.groupId || null) ? null : prev
+          );
+          return;
+        }
+        await deleteHabit(habitToRemove.id);
         if (closeDetail) setShowDetailModal(false);
-        setActiveGroupHabitId((prev) => (prev === habitToRemove.id ? null : prev));
-        setActiveGroupHabitGroupId((prev) =>
-          prev === (habitToRemove.groupId || null) ? null : prev
+        setActiveHabitId((prev) => (prev === habitToRemove.id ? null : prev));
+      } catch (error) {
+        Alert.alert(
+          'Unable to delete habit',
+          error?.message || 'Please try again. The habit was not removed from the database.'
         );
-        return;
       }
-      await deleteHabit(habitToRemove.id);
-      if (closeDetail) setShowDetailModal(false);
-      setActiveHabitId((prev) => (prev === habitToRemove.id ? null : prev));
-    } catch (error) {
-      Alert.alert(
-        'Unable to delete habit',
-        error?.message || 'Please try again. The habit was not removed from the database.'
-      );
-    }
-  };
+    },
+    [deleteGroupHabit, deleteHabit]
+  );
 
   const removeSelectedHabit = async () => {
     if (!selectedHabit) return;
     await removeHabitByItem(selectedHabit, { closeDetail: true });
   };
+
+  const setSelectedHabitFromItem = useCallback((item) => {
+    if (item.__isGroupHabit) {
+      setActiveHabitId(null);
+      setActiveGroupHabitId(item.id);
+      setActiveGroupHabitGroupId(item.groupId || null);
+      return;
+    }
+    setActiveGroupHabitId(null);
+    setActiveGroupHabitGroupId(null);
+    setActiveHabitId(item.id);
+  }, []);
+
+  const handleHabitTap = useCallback(
+    (item) => {
+      const lifecycleCompleted = hasHabitReachedEndDate(item, new Date());
+      if (isHabitsInteractionLocked && !lifecycleCompleted) return;
+      setSelectedHabitFromItem(item);
+      if (lifecycleCompleted) {
+        setShowDetailModal(true);
+        return;
+      }
+      const currentAmount = getDateProgressAmount(
+        item,
+        selectedDateKey,
+        localProgressMapRef.current
+      );
+      setManualAmount(String(Math.round(currentAmount)));
+      setManualAutoComplete(false);
+      setShowManualModal(true);
+    },
+    [isHabitsInteractionLocked, selectedDateKey, setSelectedHabitFromItem]
+  );
+
+  const handleHabitEdit = useCallback(
+    (item) => {
+      setSelectedHabitFromItem(item);
+      setShowDetailModal(true);
+    },
+    [setSelectedHabitFromItem]
+  );
+
+  const handleHabitSkip = useCallback(
+    async (item) => {
+      await applyProgress(item, 0);
+    },
+    [applyProgress]
+  );
+
+  const handleHabitReset = useCallback(
+    async (item) => {
+      await applyProgress(item, 0);
+    },
+    [applyProgress]
+  );
+
+  const handleHabitDelete = useCallback(
+    async (item) => {
+      await removeHabitByItem(item);
+    },
+    [removeHabitByItem]
+  );
+
+  const habitCardItems = useMemo(
+    () =>
+      filteredHabits.map((habit) => {
+        const amount = getDateProgressAmount(habit, selectedDateKey, localProgressMap);
+        const lifecycleCompleted = hasHabitReachedEndDate(habit, new Date());
+        return {
+          habit,
+          amount,
+          ratio: getCompletionRatio(habit, amount, selectedDate),
+          completed: isCompletedForDate(habit, selectedDateKey, amount),
+          overdone: (habit.habitType || 'build') === 'quit' && amount > getGoalValue(habit),
+          lifecycleCompleted,
+        };
+      }),
+    [filteredHabits, localProgressMap, selectedDate, selectedDateKey]
+  );
 
   const toggleWeekday = (day) => {
     setSelectedDays((prev) => {
@@ -2576,14 +2761,8 @@ const HabitsScreen = () => {
             </TouchableOpacity>
           </View>
         ) : (
-          filteredHabits.map((habit) => {
-            const amount = getDateProgressAmount(habit, selectedDateKey, localProgressMap);
-            const ratio = getCompletionRatio(habit, amount, selectedDate);
-            const completed = isCompletedForDate(habit, selectedDateKey, amount);
-            const overdone =
-              (habit.habitType || 'build') === 'quit' && amount > getGoalValue(habit);
-            const lifecycleCompleted = hasHabitReachedEndDate(habit, new Date());
-            return (
+          habitCardItems.map(
+            ({ habit, amount, ratio, completed, overdone, lifecycleCompleted }) => (
               <SwipeHabitCard
                 key={`${habit.__isGroupHabit ? 'group' : 'personal'}-${habit.id}`}
                 habit={habit}
@@ -2595,55 +2774,21 @@ const HabitsScreen = () => {
                 streakFrozen={streakFrozen}
                 freezeEligible={isSelectedDateToday}
                 isInteractive={!isHabitsInteractionLocked && isSelectedDateToday && !lifecycleCompleted}
-                onTap={(item) => {
-                  if (isHabitsInteractionLocked && !lifecycleCompleted) return;
-                  if (item.__isGroupHabit) {
-                    setActiveHabitId(null);
-                    setActiveGroupHabitId(item.id);
-                    setActiveGroupHabitGroupId(item.groupId || null);
-                  } else {
-                    setActiveGroupHabitId(null);
-                    setActiveGroupHabitGroupId(null);
-                    setActiveHabitId(item.id);
-                  }
-                  if (lifecycleCompleted) {
-                    setShowDetailModal(true);
-                    return;
-                  }
-                  setManualAmount(String(Math.round(getDateProgressAmount(item, selectedDateKey, localProgressMap))));
-                  setManualAutoComplete(false);
-                  setShowManualModal(true);
-                }}
-                onEdit={(item) => {
-                  if (item.__isGroupHabit) {
-                    setActiveHabitId(null);
-                    setActiveGroupHabitId(item.id);
-                    setActiveGroupHabitGroupId(item.groupId || null);
-                  } else {
-                    setActiveGroupHabitId(null);
-                    setActiveGroupHabitGroupId(null);
-                    setActiveHabitId(item.id);
-                  }
-                  setShowDetailModal(true);
-                }}
-                onSkip={async (item) => {
-                  await applyProgress(item, 0);
-                }}
-                onReset={async (item) => {
-                  await applyProgress(item, 0);
-                }}
-                onDelete={async (item) => {
-                  await removeHabitByItem(item);
-                }}
+                onTap={handleHabitTap}
+                onEdit={handleHabitEdit}
+                onSkip={handleHabitSkip}
+                onReset={handleHabitReset}
+                onDelete={handleHabitDelete}
                 onSwipeAdd={applyProgress}
                 onQuickAdd={handleQuickAddProgress}
                 completionMethod={habitCompletionMethod}
                 onSwipeInteractionChange={setIsHabitSwipeActive}
+                rowWidth={habitRowWidth}
                 styles={styles}
                 palette={palette}
               />
-            );
-          })
+            )
+          )
         )}
       </PlatformScrollView>
 

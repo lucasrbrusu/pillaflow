@@ -73,9 +73,11 @@ const StepsScreen = () => {
   const isFocused = useIsFocused();
   const {
     themeColors,
+    profile,
     healthConnection,
     healthDailyMetrics,
     ensureHealthLoaded,
+    updateProfile,
     upsertHealthDailyMetricForDate,
   } = useApp();
   const styles = useMemo(() => createStyles(themeColors), [themeColors]);
@@ -89,8 +91,8 @@ const StepsScreen = () => {
 
   const [selectedDate, setSelectedDate] = useState(initialDate);
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showEntryModal, setShowEntryModal] = useState(false);
-  const [stepsInput, setStepsInput] = useState('');
+  const [showGoalModal, setShowGoalModal] = useState(false);
+  const [stepsGoalInput, setStepsGoalInput] = useState('');
   const [weekOffset, setWeekOffset] = useState(0);
   const [liveTodaySteps, setLiveTodaySteps] = useState(null);
 
@@ -117,12 +119,17 @@ const StepsScreen = () => {
   const selectedDateKey = toDateKey(selectedDate);
   const selectedMetric = healthDailyMetrics?.[selectedDateKey] || null;
   const selectedTotal = Math.max(0, Math.round(Number(selectedMetric?.steps) || 0));
+  const dailyStepsGoal = Math.max(0, Math.round(Number(profile?.dailyStepsGoal) || 0));
   const todayDateKey = toDateKey(new Date());
   const isViewingToday = selectedDateKey === todayDateKey;
   const liveSelectedTotal =
     isViewingToday && Number.isFinite(liveTodaySteps)
       ? Math.max(selectedTotal, Math.round(liveTodaySteps))
       : selectedTotal;
+  const goalProgressPercent =
+    dailyStepsGoal > 0
+      ? Math.max(0, Math.min(999, Math.round((liveSelectedTotal / dailyStepsGoal) * 100)))
+      : null;
 
   useEffect(() => {
     selectedTotalRef.current = selectedTotal;
@@ -300,22 +307,34 @@ const StepsScreen = () => {
     queueLiveSnapshotPersist,
   ]);
 
-  const handleSaveEntry = async () => {
-    const parsedSteps = Math.round(Number(stepsInput));
-    if (!Number.isFinite(parsedSteps) || parsedSteps < 0) {
-      Alert.alert('Enter steps', 'Please enter a valid step count.');
+  const handleSaveGoal = async () => {
+    const trimmedGoal = stepsGoalInput.trim();
+    if (!trimmedGoal) {
+      try {
+        await updateProfile({ dailyStepsGoal: null });
+        setStepsGoalInput('');
+        setShowGoalModal(false);
+      } catch (err) {
+        console.log('Error clearing daily steps goal:', err);
+        Alert.alert('Unable to save', 'Please try again.');
+      }
+      return;
+    }
+
+    const parsedStepsGoal = Math.round(Number(trimmedGoal));
+    if (!Number.isFinite(parsedStepsGoal) || parsedStepsGoal < 0) {
+      Alert.alert('Enter a goal', 'Please enter a valid daily step goal.');
       return;
     }
 
     try {
-      await upsertHealthDailyMetricForDate(selectedDateKey, {
-        steps: parsedSteps,
-        source: 'manual',
+      await updateProfile({
+        dailyStepsGoal: parsedStepsGoal > 0 ? parsedStepsGoal : null,
       });
-      setStepsInput('');
-      setShowEntryModal(false);
+      setStepsGoalInput(parsedStepsGoal > 0 ? String(parsedStepsGoal) : '');
+      setShowGoalModal(false);
     } catch (err) {
-      console.log('Error saving manual steps:', err);
+      console.log('Error saving daily steps goal:', err);
       Alert.alert('Unable to save', 'Please try again.');
     }
   };
@@ -354,8 +373,8 @@ const StepsScreen = () => {
           <TouchableOpacity
             style={styles.addButton}
             onPress={() => {
-              setStepsInput(String(liveSelectedTotal || ''));
-              setShowEntryModal(true);
+              setStepsGoalInput(dailyStepsGoal ? String(dailyStepsGoal) : '');
+              setShowGoalModal(true);
             }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
@@ -381,6 +400,16 @@ const StepsScreen = () => {
           <Text style={styles.totalLabel}>Total steps for this day</Text>
           <Text style={styles.totalValue}>{formatStepsNumber(liveSelectedTotal)}</Text>
           <Text style={styles.totalMeta}>
+            {dailyStepsGoal
+              ? `Goal ${formatStepsNumber(dailyStepsGoal)} steps/day`
+              : 'No daily steps goal set for this account.'}
+          </Text>
+          <Text style={styles.totalMetaSecondary}>
+            {dailyStepsGoal
+              ? `${goalProgressPercent}% of your daily goal`
+              : 'Use the edit button to set a daily steps goal for your account.'}
+          </Text>
+          <Text style={styles.totalMetaSecondary}>
             Source:{' '}
             {isViewingToday && Number.isFinite(liveTodaySteps)
               ? 'platform_health_live'
@@ -481,25 +510,25 @@ const StepsScreen = () => {
       />
 
       <Modal
-        visible={showEntryModal}
-        onClose={() => setShowEntryModal(false)}
-        title="Set Daily Steps"
+        visible={showGoalModal}
+        onClose={() => setShowGoalModal(false)}
+        title="Set Daily Steps Goal"
       >
         <Input
-          label={`Steps for ${formatDateLabel(selectedDate)}`}
-          placeholder="e.g. 7421"
-          value={stepsInput}
-          onChangeText={setStepsInput}
+          label="Daily steps goal for your account"
+          placeholder="e.g. 10000"
+          value={stepsGoalInput}
+          onChangeText={setStepsGoalInput}
           keyboardType="numeric"
         />
         <View style={styles.modalButtons}>
           <Button
             title="Cancel"
             variant="secondary"
-            onPress={() => setShowEntryModal(false)}
+            onPress={() => setShowGoalModal(false)}
             style={styles.modalButton}
           />
-          <Button title="Save Snapshot" onPress={handleSaveEntry} style={styles.modalButton} />
+          <Button title="Save Goal" onPress={handleSaveGoal} style={styles.modalButton} />
         </View>
       </Modal>
     </View>
