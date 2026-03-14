@@ -17,6 +17,7 @@ import { supabase } from '../utils/supabaseClient';
 import { addAppUsageMs, splitDurationByLocalDay } from '../utils/insightsTracking';
 import { migrateLegacyStorageKeys } from '../utils/storageMigration';
 import {
+  getNotificationPermissionStatusAsync,
   requestNotificationPermissionAsync,
   cancelAllScheduledNotificationsAsync,
   cancelScheduledNotificationAsync,
@@ -92,6 +93,7 @@ const STORAGE_KEYS = {
   LAST_ACTIVE_PREFIX: '@pillaflow_last_active_',
   CALENDAR_SYNC_PREFIX: '@pillaflow_calendar_sync_',
   PUSH_DEVICE_ID: '@pillaflow_push_device_id',
+  NOTIFICATION_PROMPT_DISMISSED_PREFIX: '@pillaflow_notification_prompt_dismissed_',
 };
 
 const SUPABASE_STORAGE_KEYS = [
@@ -273,6 +275,7 @@ const defaultUserSettings = {
   allowGroupInvites: true,
   allowHabitInvites: true,
   allowRoutineInvites: true,
+  notificationPromptDismissedAt: null,
 };
 
 const createDefaultMfaFactors = () => ({
@@ -433,6 +436,8 @@ const getTasksStorageKey = (userId) => `${STORAGE_KEYS.TASKS}_${userId || 'anon'
 const getProfileStorageKey = (userId) => `${STORAGE_KEYS.PROFILE}_${userId || 'anon'}`;
 const getCalendarSyncKey = (userId) =>
   `${STORAGE_KEYS.CALENDAR_SYNC_PREFIX}${userId || 'anon'}`;
+const getNotificationPromptDismissedKey = (userId) =>
+  `${STORAGE_KEYS.NOTIFICATION_PROMPT_DISMISSED_PREFIX}${userId || 'anon'}`;
 
 const createDefaultCalendarSyncState = () => ({
   taskToEvent: {},
@@ -647,6 +652,44 @@ const writeCurrentStreakState = async (userId, nextState = DEFAULT_CURRENT_STREA
     getCurrentStreakKey(userId),
     JSON.stringify({
       ...normalized,
+      updatedAt: new Date().toISOString(),
+    })
+  );
+};
+
+const readNotificationPromptDismissedAt = async (userId) => {
+  if (!userId) return null;
+  const value = await AsyncStorage.getItem(getNotificationPromptDismissedKey(userId));
+  if (!value) return null;
+  const toDismissedAt = (candidate) => {
+    if (candidate === undefined || candidate === null) return null;
+    const text = String(candidate).trim();
+    return text.length ? text : null;
+  };
+
+  try {
+    const parsed = JSON.parse(value);
+    const candidate =
+      parsed?.dismissedAt ?? parsed?.notificationPromptDismissedAt ?? parsed ?? null;
+    return toDismissedAt(candidate);
+  } catch (error) {
+    return toDismissedAt(value);
+  }
+};
+
+const writeNotificationPromptDismissedAt = async (userId, dismissedAt = null) => {
+  if (!userId) return;
+  const normalized =
+    dismissedAt === undefined || dismissedAt === null ? null : String(dismissedAt).trim() || null;
+  if (!normalized) {
+    await AsyncStorage.removeItem(getNotificationPromptDismissedKey(userId));
+    return;
+  }
+
+  await AsyncStorage.setItem(
+    getNotificationPromptDismissedKey(userId),
+    JSON.stringify({
+      dismissedAt: normalized,
       updatedAt: new Date().toISOString(),
     })
   );
@@ -1582,6 +1625,7 @@ const achievementSyncInFlightRef = useRef(false);
   const [achievementUnlocks, setAchievementUnlocks] = useState({});
   const [achievementUnlocksLoaded, setAchievementUnlocksLoaded] = useState(false);
   const [userSettings, setUserSettings] = useState(defaultUserSettings);
+  const [userSettingsLoaded, setUserSettingsLoaded] = useState(false);
   const [revenueCatPremium, setRevenueCatPremium] = useState({
     isActive: false,
     expiration: null,
@@ -1684,6 +1728,7 @@ const achievementSyncInFlightRef = useRef(false);
   // Loading State
   const [isLoading, setIsLoading] = useState(true);
   const [hasNotificationPermission, setHasNotificationPermission] = useState(false);
+  const [hasNotificationPermissionChecked, setHasNotificationPermissionChecked] = useState(false);
   const [hasCalendarPermission, setHasCalendarPermission] = useState(false);
   const streakCheckRanRef = useRef(false);
   const [streakFrozen, setStreakFrozen] = useState(false);
@@ -1989,6 +2034,8 @@ const achievementSyncInFlightRef = useRef(false);
       setProfile(defaultProfile);
       setProfileLoaded(false);
       setUserSettings(defaultUserSettings);
+      setUserSettingsLoaded(false);
+      setHasNotificationPermissionChecked(false);
       setHasCalendarPermission(false);
       setRevenueCatPremium({
         isActive: false,
@@ -13023,7 +13070,7 @@ const mapProfileRow = (row) => {
     return defaultUserSettings[fieldConfig.settingsKey];
   }, []);
 
-  const mapSettingsRow = (row, fallbackCompletionMethod = null) => ({
+  const mapSettingsRow = (row, fallbackCompletionMethod = null, fallbackValues = {}) => ({
     id: row?.id || null,
     themeName: row?.theme_name || 'default',
     notificationsEnabled: row?.notifications_enabled ?? defaultUserSettings.notificationsEnabled,
@@ -13046,10 +13093,22 @@ const mapProfileRow = (row) => {
     allowGroupInvites: readInvitePermissionFromRow(row, 'group'),
     allowHabitInvites: readInvitePermissionFromRow(row, 'habit'),
     allowRoutineInvites: readInvitePermissionFromRow(row, 'routine'),
+    notificationPromptDismissedAt:
+      normalizeOptionalText(
+        row?.notification_prompt_dismissed_at ?? row?.notificationPromptDismissedAt,
+        null
+      ) ??
+      normalizeOptionalText(
+        fallbackValues?.notificationPromptDismissedAt ??
+          userSettings?.notificationPromptDismissedAt,
+        defaultUserSettings.notificationPromptDismissedAt
+      ),
   });
 
   const fetchUserSettings = async (userId) => {
     if (!userId) return null;
+    const localNotificationPromptDismissedAt =
+      await readNotificationPromptDismissedAt(userId);
     const requiredSelectFields = [
       'id',
       'user_id',
@@ -13064,6 +13123,7 @@ const mapProfileRow = (row) => {
       'routine_reminders_enabled',
       'habit_completion_method',
       'calendar_sync_enabled',
+      'notification_prompt_dismissed_at',
       INVITE_PERMISSION_FIELDS.task.column,
       INVITE_PERMISSION_FIELDS.group.column,
       INVITE_PERMISSION_FIELDS.habit.column,
@@ -13117,23 +13177,47 @@ const mapProfileRow = (row) => {
 
     if (lastError) {
       console.log('Error fetching user settings:', lastError);
+      setUserSettings((prev) => ({
+        ...prev,
+        notificationPromptDismissedAt:
+          localNotificationPromptDismissedAt ?? prev.notificationPromptDismissedAt ?? null,
+      }));
+      setUserSettingsLoaded(true);
       return null;
     }
 
     if (!row) {
-      row = await upsertUserSettings({ ...defaultUserSettings }, userId);
+      row = await upsertUserSettings(
+        {
+          ...defaultUserSettings,
+          notificationPromptDismissedAt: localNotificationPromptDismissedAt,
+        },
+        userId
+      );
     }
 
     if (row) {
       const mapped = mapSettingsRow(
         row,
-        userSettings?.habitCompletionMethod ?? defaultUserSettings.habitCompletionMethod
+        userSettings?.habitCompletionMethod ?? defaultUserSettings.habitCompletionMethod,
+        {
+          notificationPromptDismissedAt: localNotificationPromptDismissedAt,
+        }
       );
       setUserSettings(mapped);
+      setUserSettingsLoaded(true);
+      await writeNotificationPromptDismissedAt(userId, mapped.notificationPromptDismissedAt);
       const themeToApply = mapped.themeName || 'default';
       setThemeName(themeToApply);
       applyTheme(themeToApply);
       cacheThemeLocally(themeToApply);
+    } else {
+      setUserSettings((prev) => ({
+        ...prev,
+        notificationPromptDismissedAt:
+          localNotificationPromptDismissedAt ?? prev.notificationPromptDismissedAt ?? null,
+      }));
+      setUserSettingsLoaded(true);
     }
 
     return row;
@@ -13181,6 +13265,10 @@ const mapProfileRow = (row) => {
         overrides.allowRoutineInvites ??
         userSettings.allowRoutineInvites ??
         defaultUserSettings.allowRoutineInvites,
+      notification_prompt_dismissed_at:
+        overrides.notificationPromptDismissedAt ??
+        userSettings.notificationPromptDismissedAt ??
+        defaultUserSettings.notificationPromptDismissedAt,
       language: 'en',
       updated_at: nowISO,
     };
@@ -13221,15 +13309,33 @@ const mapProfileRow = (row) => {
           overrides.habitCompletionMethod ??
           userSettings.habitCompletionMethod ??
           defaultUserSettings.habitCompletionMethod
-      )
+      ),
+      {
+        notificationPromptDismissedAt:
+          mutablePayload.notification_prompt_dismissed_at ??
+          overrides.notificationPromptDismissedAt ??
+          userSettings.notificationPromptDismissedAt ??
+          defaultUserSettings.notificationPromptDismissedAt,
+      }
     );
     setUserSettings(mapped);
+    setUserSettingsLoaded(true);
     return data;
   };
 
   const updateUserSettings = async (updates) => {
     const merged = { ...userSettings, ...updates };
     setUserSettings(merged);
+    setUserSettingsLoaded(true);
+    if (
+      authUser?.id &&
+      Object.prototype.hasOwnProperty.call(updates || {}, 'notificationPromptDismissedAt')
+    ) {
+      await writeNotificationPromptDismissedAt(
+        authUser.id,
+        updates.notificationPromptDismissedAt
+      );
+    }
     return upsertUserSettings(merged);
   };
 
@@ -13585,6 +13691,8 @@ const mapProfileRow = (row) => {
     // `user` is a Supabase auth user object
     const isSameUser = authUser?.id && user?.id && String(authUser.id) === String(user.id);
     setProfileLoaded(false);
+    setUserSettingsLoaded(false);
+    setHasNotificationPermissionChecked(false);
     setMfaFactors(createDefaultMfaFactors());
     setMfaCurrentLevel(null);
     setMfaNextLevel(null);
@@ -13804,6 +13912,9 @@ const mapProfileRow = (row) => {
     setHasOnboarded(false);
     setProfile(defaultProfile);
     setUserSettings(defaultUserSettings);
+    setUserSettingsLoaded(false);
+    setHasNotificationPermission(false);
+    setHasNotificationPermissionChecked(false);
     setHasCalendarPermission(false);
     setThemeName('default');
     applyTheme('default');
@@ -13992,6 +14103,35 @@ const mapProfileRow = (row) => {
       }),
     ]);
 
+  const refreshNotificationPermissionStatus = useCallback(async () => {
+    if (!authUser?.id) {
+      setHasNotificationPermission(false);
+      setHasNotificationPermissionChecked(false);
+      return false;
+    }
+
+    try {
+      const granted = await getNotificationPermissionStatusAsync();
+      setHasNotificationPermission(granted);
+      setHasNotificationPermissionChecked(true);
+      return granted;
+    } catch (error) {
+      console.log('Error checking notification permission:', error);
+      setHasNotificationPermission(false);
+      setHasNotificationPermissionChecked(true);
+      return false;
+    }
+  }, [authUser?.id]);
+
+  const dismissNotificationPermissionPrompt = useCallback(async () => {
+    if (!authUser?.id) return null;
+    const dismissedAt = new Date().toISOString();
+
+    await writeNotificationPromptDismissedAt(authUser.id, dismissedAt);
+    await updateUserSettings({ notificationPromptDismissedAt: dismissedAt });
+    return dismissedAt;
+  }, [authUser?.id, updateUserSettings]);
+
   const registerPushTokenIfNeeded = useCallback(
     async (force = false) => {
       if (
@@ -14069,6 +14209,43 @@ const mapProfileRow = (row) => {
       return token;
     },
     [authUser?.id, hasNotificationPermission, userSettings.notificationsEnabled]
+  );
+
+  const requestNotificationPermission = useCallback(
+    async ({ enableNotificationsSetting = false } = {}) => {
+      if (!authUser?.id) return false;
+
+      if (enableNotificationsSetting && !userSettings.notificationsEnabled) {
+        await updateUserSettings({ notificationsEnabled: true });
+      }
+
+      let granted = false;
+      try {
+        granted = await requestNotificationPermissionAsync();
+      } catch (error) {
+        console.log('Error requesting notification permission:', error);
+        granted = false;
+      }
+
+      setHasNotificationPermission(granted);
+      setHasNotificationPermissionChecked(true);
+
+      if (!granted) {
+        await cancelAllScheduledNotificationsAsync();
+        await clearAllNotificationIds();
+        return false;
+      }
+
+      await registerPushTokenIfNeeded(true);
+      return true;
+    },
+    [
+      authUser?.id,
+      clearAllNotificationIds,
+      registerPushTokenIfNeeded,
+      updateUserSettings,
+      userSettings.notificationsEnabled,
+    ]
   );
 
   // NOTIFICATION HELPERS
@@ -14684,22 +14861,23 @@ const mapProfileRow = (row) => {
 
   useEffect(() => {
     const syncPermission = async () => {
-      if (!authUser || !userSettings.notificationsEnabled) {
+      if (!authUser?.id) {
         setHasNotificationPermission(false);
+        setHasNotificationPermissionChecked(false);
         await cancelAllScheduledNotificationsAsync();
         await clearAllNotificationIds();
         return;
       }
-      const granted = await requestNotificationPermissionAsync();
-      setHasNotificationPermission(granted);
-      if (!granted) {
+
+      const granted = await refreshNotificationPermissionStatus();
+      if (!userSettings.notificationsEnabled || !granted) {
         await cancelAllScheduledNotificationsAsync();
         await clearAllNotificationIds();
       }
     };
 
     syncPermission();
-  }, [authUser, userSettings.notificationsEnabled]);
+  }, [authUser?.id, refreshNotificationPermissionStatus, userSettings.notificationsEnabled]);
 
   useEffect(() => {
     let mounted = true;
@@ -14837,6 +15015,7 @@ const mapProfileRow = (row) => {
       const prevState = appStateRef.current;
       appStateRef.current = nextState;
       if (prevState !== 'active' && nextState === 'active') {
+        refreshNotificationPermissionStatus();
         rescheduleAllNotifications();
         registerPushTokenIfNeeded(true);
       }
@@ -14844,7 +15023,12 @@ const mapProfileRow = (row) => {
 
     const sub = AppState.addEventListener('change', onStateChange);
     return () => sub?.remove?.();
-  }, [authUser?.id, rescheduleAllNotifications, registerPushTokenIfNeeded]);
+  }, [
+    authUser?.id,
+    refreshNotificationPermissionStatus,
+    rescheduleAllNotifications,
+    registerPushTokenIfNeeded,
+  ]);
 
   // COMPUTED VALUES
   const getCurrentStreak = () => currentStreak;
@@ -14949,8 +15133,10 @@ const mapProfileRow = (row) => {
     isLoading,
     themeReady,
     hasNotificationPermission,
+    hasNotificationPermissionChecked,
     hasCalendarPermission,
     profileLoaded,
+    userSettingsLoaded,
 
     // Data loaders
     ensureHomeDataLoaded,
@@ -15156,6 +15342,9 @@ const mapProfileRow = (row) => {
     completeHabitsTutorial,
     userSettings,
     updateUserSettings,
+    refreshNotificationPermissionStatus,
+    requestNotificationPermission,
+    dismissNotificationPermissionPrompt,
     setCalendarSyncEnabled,
     requestCalendarPermission,
     t,

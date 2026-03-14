@@ -17,6 +17,7 @@ import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors, shadows, borderRadius } from '../utils/theme';
 import { useApp } from '../context/AppContext';
 import AppTutorialOverlay from '../components/AppTutorialOverlay';
+import NotificationPermissionOverlay from '../components/NotificationPermissionOverlay';
 import StreakIncreaseToast from '../components/StreakIncreaseToast';
 
 // Screens
@@ -267,6 +268,10 @@ const MainWithChatButton = ({
   onDismissTutorial,
   currentStreakIncreaseNotice,
   onDismissCurrentStreakNotice,
+  showNotificationPrompt,
+  onCloseNotificationPrompt,
+  onEnableNotificationPrompt,
+  onDontAskAgainNotificationPrompt,
   tabBarLayout,
   onTabBarLayout,
   themeColors,
@@ -315,6 +320,13 @@ const MainWithChatButton = ({
         }}
         themeColors={themeColors}
       />
+      <NotificationPermissionOverlay
+        visible={showNotificationPrompt}
+        onClose={onCloseNotificationPrompt}
+        onEnable={onEnableNotificationPrompt}
+        onDontAskAgain={onDontAskAgainNotificationPrompt}
+        themeColors={themeColors}
+      />
     </View>
   );
 };
@@ -334,8 +346,16 @@ const Navigation = () => {
     completeAppTutorial,
     currentStreakIncreaseNotice,
     dismissCurrentStreakIncreaseNotice,
+    userSettings,
+    userSettingsLoaded,
+    hasNotificationPermission,
+    hasNotificationPermissionChecked,
+    requestNotificationPermission,
+    dismissNotificationPermissionPrompt,
   } = useApp();
   const [showAppTutorial, setShowAppTutorial] = React.useState(false);
+  const [hideNotificationPromptForSession, setHideNotificationPromptForSession] =
+    React.useState(false);
   const [tabBarLayout, setTabBarLayout] = React.useState(null);
   const styles = React.useMemo(() => createStyles(), [themeColors]);
   const isPremiumActive = Boolean(
@@ -356,10 +376,43 @@ const Navigation = () => {
     setShowAppTutorial(!hasCompletedAppTutorial);
   }, [authUser?.id, profileLoaded, hasCompletedAppTutorial]);
 
+  React.useEffect(() => {
+    setHideNotificationPromptForSession(false);
+  }, [authUser?.id]);
+
   const handleDismissTutorial = React.useCallback(() => {
     setShowAppTutorial(false);
     completeAppTutorial();
   }, [completeAppTutorial]);
+
+  const handleCloseNotificationPrompt = React.useCallback(() => {
+    setHideNotificationPromptForSession(true);
+  }, []);
+
+  const handleEnableNotificationPrompt = React.useCallback(async () => {
+    const granted = await requestNotificationPermission({
+      enableNotificationsSetting: true,
+    });
+    if (granted) {
+      setHideNotificationPromptForSession(false);
+    }
+  }, [requestNotificationPermission]);
+
+  const handleDontAskAgainNotificationPrompt = React.useCallback(async () => {
+    setHideNotificationPromptForSession(true);
+    await dismissNotificationPermissionPrompt();
+  }, [dismissNotificationPermissionPrompt]);
+
+  const shouldShowNotificationPrompt = Boolean(
+    authUser?.id &&
+      profileLoaded &&
+      userSettingsLoaded &&
+      hasNotificationPermissionChecked &&
+      !hasNotificationPermission &&
+      !userSettings?.notificationPromptDismissedAt &&
+      !hideNotificationPromptForSession &&
+      !showAppTutorial
+  );
 
   const navTheme = React.useMemo(
     () => ({
@@ -410,6 +463,12 @@ const Navigation = () => {
                   onDismissTutorial={handleDismissTutorial}
                   currentStreakIncreaseNotice={currentStreakIncreaseNotice}
                   onDismissCurrentStreakNotice={dismissCurrentStreakIncreaseNotice}
+                  showNotificationPrompt={shouldShowNotificationPrompt}
+                  onCloseNotificationPrompt={handleCloseNotificationPrompt}
+                  onEnableNotificationPrompt={handleEnableNotificationPrompt}
+                  onDontAskAgainNotificationPrompt={
+                    handleDontAskAgainNotificationPrompt
+                  }
                   tabBarLayout={tabBarLayout}
                   onTabBarLayout={(event) => setTabBarLayout(event?.nativeEvent?.layout || null)}
                   themeColors={themeColors}

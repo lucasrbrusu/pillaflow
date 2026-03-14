@@ -13,6 +13,9 @@ Notifications.setNotificationHandler({
 
 const ANDROID_CHANNEL_ID = 'pillaflow-default';
 
+const isPermissionGranted = (permissionResponse) =>
+  permissionResponse?.granted === true || permissionResponse?.status === 'granted';
+
 export const ensureDefaultChannelAsync = async () => {
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
@@ -27,16 +30,28 @@ export const ensureDefaultChannelAsync = async () => {
   return undefined;
 };
 
-export const requestNotificationPermissionAsync = async () => {
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  let finalStatus = existingStatus;
+export const getNotificationPermissionStatusAsync = async () => {
+  const permission = await Notifications.getPermissionsAsync();
+  const granted = isPermissionGranted(permission);
 
-  if (existingStatus !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
+  if (granted) {
+    await ensureDefaultChannelAsync();
   }
 
-  if (finalStatus !== 'granted') {
+  return granted;
+};
+
+export const requestNotificationPermissionAsync = async () => {
+  const existingPermission = await Notifications.getPermissionsAsync();
+  if (isPermissionGranted(existingPermission)) {
+    await ensureDefaultChannelAsync();
+    return true;
+  }
+
+  const requestedPermission = await Notifications.requestPermissionsAsync();
+  const granted = isPermissionGranted(requestedPermission);
+
+  if (!granted) {
     return false;
   }
 

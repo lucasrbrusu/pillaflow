@@ -7,12 +7,18 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 import { Card, Button, PlatformScrollView } from '../components';
 import { colors, spacing, typography } from '../utils/theme';
-import { requestNotificationPermissionAsync } from '../utils/notifications';
 
 const NotificationSettingsScreen = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { userSettings, updateUserSettings, hasNotificationPermission, themeColors, t } = useApp();
+  const {
+    userSettings,
+    updateUserSettings,
+    hasNotificationPermission,
+    requestNotificationPermission,
+    themeColors,
+    t,
+  } = useApp();
   const styles = useMemo(() => createStyles(themeColors), [themeColors]);
 
   const handleToggle = async (key, value) => {
@@ -24,7 +30,7 @@ const NotificationSettingsScreen = () => {
   };
 
   const handleSyncPermissions = async () => {
-    await requestNotificationPermissionAsync();
+    await requestNotificationPermission({ enableNotificationsSetting: true });
   };
 
   return (
