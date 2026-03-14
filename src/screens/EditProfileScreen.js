@@ -63,6 +63,11 @@ const EditProfileScreen = () => {
           border: isDark ? 'rgba(249,115,22,0.35)' : '#FFD9B5',
           icon: '#F97316',
         },
+        steps: {
+          bg: isDark ? 'rgba(16,185,129,0.18)' : '#ECFDF5',
+          border: isDark ? 'rgba(16,185,129,0.35)' : '#A7F3D0',
+          icon: '#10B981',
+        },
         water: {
           bg: isDark ? 'rgba(59,130,246,0.18)' : '#EFF6FF',
           border: isDark ? 'rgba(59,130,246,0.35)' : '#BFDBFE',
@@ -83,6 +88,7 @@ const EditProfileScreen = () => {
   const [email, setEmail] = useState(profile?.email || '');
   const [photo, setPhoto] = useState(profile?.photo || null);
   const [calorieGoal, setCalorieGoal] = useState(String(profile?.dailyCalorieGoal ?? 2000));
+  const [stepsGoal, setStepsGoal] = useState(String(profile?.dailyStepsGoal ?? ''));
   const [waterGoal, setWaterGoal] = useState(String(profile?.dailyWaterGoal ?? 2));
   const [sleepGoal, setSleepGoal] = useState(String(profile?.dailySleepGoal ?? 8));
   const [isEditing, setIsEditing] = useState(false);
@@ -94,11 +100,13 @@ const EditProfileScreen = () => {
     setEmail(profile?.email || '');
     setPhoto(profile?.photo || null);
     setCalorieGoal(String(profile?.dailyCalorieGoal ?? 2000));
+    setStepsGoal(String(profile?.dailyStepsGoal ?? ''));
     setWaterGoal(String(profile?.dailyWaterGoal ?? 2));
     setSleepGoal(String(profile?.dailySleepGoal ?? 8));
   }, [
     isEditing,
     profile?.dailyCalorieGoal,
+    profile?.dailyStepsGoal,
     profile?.dailySleepGoal,
     profile?.dailyWaterGoal,
     profile?.email,
@@ -116,6 +124,7 @@ const EditProfileScreen = () => {
     setEmail(profile?.email || '');
     setPhoto(profile?.photo || null);
     setCalorieGoal(String(profile?.dailyCalorieGoal ?? 2000));
+    setStepsGoal(String(profile?.dailyStepsGoal ?? ''));
     setWaterGoal(String(profile?.dailyWaterGoal ?? 2));
     setSleepGoal(String(profile?.dailySleepGoal ?? 8));
     setIsEditing(true);
@@ -123,6 +132,16 @@ const EditProfileScreen = () => {
 
   const handleSave = async () => {
     if (saving) return;
+    const trimmedStepsGoal = stepsGoal.trim();
+    const parsedStepsGoal = trimmedStepsGoal ? Math.round(Number(trimmedStepsGoal)) : null;
+    if (
+      trimmedStepsGoal &&
+      (!Number.isFinite(parsedStepsGoal) || parsedStepsGoal < 0)
+    ) {
+      Alert.alert('Enter a goal', 'Please enter a valid daily steps goal.');
+      return;
+    }
+
     try {
       setSaving(true);
       await updateProfile({
@@ -130,6 +149,7 @@ const EditProfileScreen = () => {
         email: email.trim(),
         photo,
         dailyCalorieGoal: parseInt(calorieGoal) || 2000,
+        dailyStepsGoal: parsedStepsGoal > 0 ? parsedStepsGoal : null,
         dailyWaterGoal: parseFloat(waterGoal) || 2,
         dailySleepGoal: parseInt(sleepGoal) || 8,
       });
@@ -431,6 +451,23 @@ const EditProfileScreen = () => {
                 inputStyle={styles.formInputText}
               />
               <Input
+                label="Daily Steps Goal"
+                value={stepsGoal}
+                onChangeText={setStepsGoal}
+                placeholder="10000"
+                keyboardType="numeric"
+                icon="walk-outline"
+                containerStyle={styles.formInputContainer}
+                style={[
+                  styles.formInput,
+                  {
+                    backgroundColor: profileTheme.goalTints.steps.bg,
+                    borderColor: profileTheme.goalTints.steps.border,
+                  },
+                ]}
+                inputStyle={styles.formInputText}
+              />
+              <Input
                 label="Daily Water Goal (L)"
                 value={waterGoal}
                 onChangeText={setWaterGoal}
@@ -470,6 +507,12 @@ const EditProfileScreen = () => {
               <View style={[styles.detailRow, styles.detailRowDivider]}>
                 <Text style={styles.detailLabel}>Daily Calorie Goal</Text>
                 <Text style={styles.detailValue}>{calorieGoal || '-'} kcal</Text>
+              </View>
+              <View style={[styles.detailRow, styles.detailRowDivider]}>
+                <Text style={styles.detailLabel}>Daily Steps Goal</Text>
+                <Text style={styles.detailValue}>
+                  {stepsGoal ? `${Number(stepsGoal).toLocaleString('en-US')} steps` : '-'}
+                </Text>
               </View>
               <View style={[styles.detailRow, styles.detailRowDivider]}>
                 <Text style={styles.detailLabel}>Daily Water Goal</Text>

@@ -11,22 +11,22 @@ const legalLinks = [
   {
     id: 'terms',
     label: 'Terms of Service',
-    url: 'https://pillaflow.net/terms-of-service.html',
+    url: 'https://pillaflow.com/terms-of-service.html',
   },
   {
     id: 'privacy',
     label: 'Privacy Policy',
-    url: 'https://pillaflow.net/privacy-policy.html',
+    url: 'https://pillaflow.com/privacy-policy.html',
   },
   {
     id: 'community',
     label: 'Community Guidelines',
-    url: 'https://pillaflow.net/community-guidelines.html',
+    url: 'https://pillaflow.com/community-guidelines.html',
   },
   {
     id: 'subscription-terms',
     label: 'Subscription Terms',
-    url: 'https://pillaflow.net/premium-subscription-terms.html',
+    url: 'https://pillaflow.com/premium-subscription-terms.html',
   },
 ];
 
