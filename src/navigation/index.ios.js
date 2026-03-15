@@ -140,6 +140,7 @@ const CustomTabBar = ({ state, descriptors, navigation, styles, onTabBarLayout }
 
   return (
     <View
+      pointerEvents="box-none"
       style={[
         styles.tabBarContainer,
         { paddingBottom: insets.bottom > 0 ? insets.bottom : 12 },

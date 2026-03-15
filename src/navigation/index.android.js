@@ -157,7 +157,7 @@ const CustomTabBar = ({ state, descriptors, navigation, styles, onTabBarLayout }
   const gapIndex = Math.floor((state.routes.length - 1) / 2);
 
   return (
-    <View style={[styles.tabBarContainer, { paddingBottom: bottomPadding }]}>
+    <View pointerEvents="box-none" style={[styles.tabBarContainer, { paddingBottom: bottomPadding }]}>
       <View style={styles.tabBar} onLayout={onTabBarLayout}>
         {state.routes.map((route, index) => {
           const isFocused = state.index === index;
