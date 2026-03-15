@@ -432,20 +432,46 @@ const withDefaults = (habit) => ({
 });
 
 const getGoalValue = (habit) => Math.max(1, parseNumber(habit?.goalValue, 1));
+const SKIPPED_HABIT_AMOUNT = -1;
+const isHabitSkippedAmount = (amount) => Number(amount) === SKIPPED_HABIT_AMOUNT;
 
-const getDateProgressAmount = (habit, dateKey, localMap) => {
-  const key = `${habit.id}|${dateKey}`;
-  if (Object.prototype.hasOwnProperty.call(localMap, key)) {
-    return parseNumber(localMap[key], 0);
-  }
-  const map = habit.progressByDate || {};
+const getHabitProgressCacheKey = (habit, dateKey) =>
+  `${habit?.__isGroupHabit ? 'group' : 'personal'}|${habit?.id}|${dateKey}`;
+
+const getPersistedDateProgressValue = (habit, dateKey) => {
+  const map = habit?.progressByDate || {};
   if (Object.prototype.hasOwnProperty.call(map, dateKey)) return parseNumber(map[dateKey], 0);
-  if ((habit.completedDates || []).includes(dateKey)) return getGoalValue(habit);
+  if ((habit?.skippedDates || []).includes(dateKey)) return SKIPPED_HABIT_AMOUNT;
+  if ((habit?.completedDates || []).includes(dateKey)) return getGoalValue(habit);
   return 0;
 };
 
-const getCompletionRatio = (habit, amount, referenceDate = new Date()) => {
+const getPersistedDateProgressAmount = (habit, dateKey) => {
+  const rawAmount = getPersistedDateProgressValue(habit, dateKey);
+  return isHabitSkippedAmount(rawAmount) ? 0 : Math.max(0, parseNumber(rawAmount, 0));
+};
+
+const isHabitSkippedForDate = (habit, dateKey, localMap = {}) => {
+  const key = getHabitProgressCacheKey(habit, dateKey);
+  if (Object.prototype.hasOwnProperty.call(localMap, key)) {
+    return isHabitSkippedAmount(localMap[key]);
+  }
+  if ((habit?.skippedDates || []).includes(dateKey)) return true;
+  return isHabitSkippedAmount(getPersistedDateProgressValue(habit, dateKey));
+};
+
+const getDateProgressAmount = (habit, dateKey, localMap) => {
+  const key = getHabitProgressCacheKey(habit, dateKey);
+  if (Object.prototype.hasOwnProperty.call(localMap, key)) {
+    const rawAmount = parseNumber(localMap[key], 0);
+    return isHabitSkippedAmount(rawAmount) ? 0 : Math.max(0, rawAmount);
+  }
+  return getPersistedDateProgressAmount(habit, dateKey);
+};
+
+const getCompletionRatio = (habit, amount, referenceDate = new Date(), skipped = false) => {
   if (hasHabitReachedEndDate(habit, referenceDate)) return 1;
+  if (skipped) return 0;
   const goal = getGoalValue(habit);
   if ((habit?.habitType || 'build') === 'quit') {
     if (amount <= goal) return 1;
@@ -454,8 +480,9 @@ const getCompletionRatio = (habit, amount, referenceDate = new Date()) => {
   return clamp(amount / goal, 0, 1);
 };
 
-const isCompletedForDate = (habit, dateKey, amount) => {
+const isCompletedForDate = (habit, dateKey, amount, skipped = false) => {
   if (hasHabitReachedEndDate(habit, dateKey)) return true;
+  if (skipped) return false;
   if ((habit?.habitType || 'build') === 'quit') {
     return amount <= getGoalValue(habit);
   }
@@ -494,46 +521,68 @@ const getStreakUnit = (goalPeriod = 'day', plural = false) => {
 };
 const formatStreakSummary = (streak = 0, goalPeriod = 'day') =>
   `${streak} ${getStreakUnit(goalPeriod)} streak`;
-const computeCurrentStreakFromDateKeys = (dateKeys = [], goalPeriod = 'day', referenceDate = new Date()) => {
-  const indices = Array.from(
+const getUniquePeriodIndicesFromDateKeys = (dateKeys = [], goalPeriod = 'day') =>
+  Array.from(
     new Set(
       (dateKeys || [])
         .map((value) => getStreakPeriodIndex(value, goalPeriod))
         .filter((index) => Number.isFinite(index))
     )
   ).sort((a, b) => a - b);
+
+const computeCurrentStreakFromDateKeys = (
+  dateKeys = [],
+  goalPeriod = 'day',
+  referenceDate = new Date(),
+  skippedDates = []
+) => {
+  const indices = getUniquePeriodIndicesFromDateKeys(dateKeys, goalPeriod);
   if (!indices.length) return 0;
 
   const currentPeriodIndex = getStreakPeriodIndex(referenceDate, goalPeriod);
   if (!Number.isFinite(currentPeriodIndex)) return 0;
 
-  const latestCompletedPeriod = indices[indices.length - 1];
-  if (currentPeriodIndex - latestCompletedPeriod > 1) return 0;
+  const completedSet = new Set(indices);
+  const skippedSet = new Set(getUniquePeriodIndicesFromDateKeys(skippedDates, goalPeriod));
+  let cursor = currentPeriodIndex;
 
-  const indexSet = new Set(indices);
-  let streak = 0;
-  let cursor = latestCompletedPeriod;
-  while (indexSet.has(cursor)) {
-    streak += 1;
+  if (!completedSet.has(cursor) && !skippedSet.has(cursor)) {
     cursor -= 1;
   }
+
+  while (skippedSet.has(cursor)) {
+    cursor -= 1;
+  }
+
+  let streak = 0;
+  while (completedSet.has(cursor)) {
+    streak += 1;
+    cursor -= 1;
+    while (skippedSet.has(cursor)) {
+      cursor -= 1;
+    }
+  }
+
   return streak;
 };
-const computeBestStreakFromDateKeys = (dateKeys = [], goalPeriod = 'day') => {
-  const indices = Array.from(
-    new Set(
-      (dateKeys || [])
-        .map((value) => getStreakPeriodIndex(value, goalPeriod))
-        .filter((index) => Number.isFinite(index))
-    )
-  ).sort((a, b) => a - b);
+
+const computeBestStreakFromDateKeys = (dateKeys = [], goalPeriod = 'day', skippedDates = []) => {
+  const indices = getUniquePeriodIndicesFromDateKeys(dateKeys, goalPeriod);
+  const skippedSet = new Set(getUniquePeriodIndicesFromDateKeys(skippedDates, goalPeriod));
 
   if (!indices.length) return 0;
 
   let best = 1;
   let current = 1;
   for (let index = 1; index < indices.length; index += 1) {
-    if (indices[index] - indices[index - 1] === 1) {
+    let onlySkippedGap = true;
+    for (let cursor = indices[index - 1] + 1; cursor < indices[index]; cursor += 1) {
+      if (!skippedSet.has(cursor)) {
+        onlySkippedGap = false;
+        break;
+      }
+    }
+    if (onlySkippedGap) {
       current += 1;
       if (current > best) best = current;
     } else {
@@ -548,6 +597,7 @@ const SwipeHabitCard = React.memo(({
   progress,
   ratio,
   completed,
+  skipped = false,
   achieved = false,
   overdone = false,
   streakFrozen = false,
@@ -589,7 +639,8 @@ const SwipeHabitCard = React.memo(({
     swipeStepAmount >= 1 ? 0 : Math.min(3, String(swipeStepAmount).split('.')[1]?.length || 1);
   const resolvedCompletionMethod = normalizeHabitCompletionMethod(completionMethod);
   const manualPlusEnabled = resolvedCompletionMethod === 'manual_plus';
-  const canSwipeProgress = swipeGesturesEnabled && isInteractive && !achieved && !manualPlusEnabled;
+  const canSwipeProgress =
+    swipeGesturesEnabled && isInteractive && !achieved && !manualPlusEnabled && !skipped;
   const canSwipeActions = swipeGesturesEnabled && (isInteractive || achieved);
   const translateX = useRef(new Animated.Value(0)).current;
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -1042,7 +1093,8 @@ const SwipeHabitCard = React.memo(({
     ? computeCurrentStreakFromDateKeys(
         habit?.completedDates || [],
         habit?.goalPeriod || 'day',
-        achievedReferenceDate
+        achievedReferenceDate,
+        habit?.skippedDates || []
       )
     : 0;
   const overdoneVisual = overdone && !achieved;
@@ -1106,6 +1158,7 @@ const SwipeHabitCard = React.memo(({
     freezeEligible &&
     !overdoneVisual &&
     !achieved &&
+    !skipped &&
     !completed &&
     (habit.streak || 0) > 0;
   const streakIconColor = overdoneVisual
@@ -1130,6 +1183,8 @@ const SwipeHabitCard = React.memo(({
     ? 'Stick to your limit to complete this quit habit and keep your streak.'
     : achieved
       ? 'This habit has been achieved'
+      : skipped
+        ? 'Skipped for today - unskip to resume progress'
       : manualPlusEnabled
         ? 'Tap + to add progress - Swipe left for actions - Tap for exact amount'
         : 'Swipe right to add progress - Swipe left for actions - Tap for exact amount';
@@ -1212,7 +1267,9 @@ const SwipeHabitCard = React.memo(({
                   <Text style={[styles.habitTitle, { color: habitTextColor }]} numberOfLines={1}>{habit.title}</Text>
                   {!achieved ? (
                     <Text style={[styles.habitMeta, { color: habitSubTextColor }]}>
-                      {displayProgressLabel} / {goalValueLabel} {habit.goalUnit || 'times'}
+                      {skipped
+                        ? 'Skipped for today'
+                        : `${displayProgressLabel} / ${goalValueLabel} ${habit.goalUnit || 'times'}`}
                     </Text>
                   ) : null}
                 </View>
@@ -1223,7 +1280,10 @@ const SwipeHabitCard = React.memo(({
                       {streakLabel}
                     </Text>
                   </View>
-                  {!achieved && manualPlusEnabled ? (
+                  {!achieved && skipped ? (
+                    <Text style={[styles.progressMetaPercent, { color: habitTextColor }]}>Skipped</Text>
+                  ) : null}
+                  {!achieved && manualPlusEnabled && !skipped ? (
                     <TouchableOpacity
                       style={[
                         styles.quickAddButton,
@@ -1242,9 +1302,9 @@ const SwipeHabitCard = React.memo(({
                       <Ionicons name="add" size={16} color="#FFFFFF" />
                     </TouchableOpacity>
                   ) : null}
-                  {!achieved && !manualPlusEnabled ? (
+                  {!achieved && !manualPlusEnabled && !skipped ? (
                     <Text style={[styles.progressMetaPercent, { color: habitTextColor }]}>
-                      {Math.round(livePreviewRatio * 100)}%
+                      {`${Math.round(livePreviewRatio * 100)}%`}
                     </Text>
                   ) : null}
                 </View>
@@ -1278,7 +1338,7 @@ const SwipeHabitCard = React.memo(({
             <>
               <TouchableOpacity style={[styles.actionTile, styles.actionTileSkip]} onPress={() => { closeActions(); onSkip(habit); }}>
                 <Ionicons name="play-skip-forward" size={17} color="#FF8A1F" />
-                <Text style={[styles.actionText, { color: '#FF8A1F' }]}>Skip</Text>
+                <Text style={[styles.actionText, { color: '#FF8A1F' }]}>{skipped ? 'Unskip' : 'Skip'}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.actionTile, styles.actionTileReset]} onPress={() => { closeActions(); onReset(habit); }}>
                 <Ionicons name="refresh" size={17} color="#16A34A" />
@@ -1326,6 +1386,8 @@ const HabitsScreen = () => {
     updateUserSettings,
     ensureHabitsLoaded,
     setHabitProgress,
+    setHabitSkipped,
+    setGroupHabitSkipped,
     streakFrozen,
     completeHabitsTutorial,
   } = useApp();
@@ -1415,6 +1477,7 @@ const HabitsScreen = () => {
   const handledCreateRequestKeyRef = useRef(null);
   const handledGroupDetailRequestKeyRef = useRef(null);
   const localProgressMapRef = useRef(localProgressMap);
+  const resetProgressBaselineRef = useRef({});
 
   const [showGoalPeriodSheet, setShowGoalPeriodSheet] = useState(false);
   const [showTaskDaysSheet, setShowTaskDaysSheet] = useState(false);
@@ -1484,6 +1547,15 @@ const HabitsScreen = () => {
     localProgressMapRef.current = localProgressMap;
   }, [localProgressMap]);
 
+  const ensureResetProgressBaseline = useCallback((habit, dateKey) => {
+    if (!habit?.id || !dateKey) return 0;
+    const key = getHabitProgressCacheKey(habit, dateKey);
+    if (!Object.prototype.hasOwnProperty.call(resetProgressBaselineRef.current, key)) {
+      resetProgressBaselineRef.current[key] = getPersistedDateProgressValue(habit, dateKey);
+    }
+    return parseNumber(resetProgressBaselineRef.current[key], 0);
+  }, []);
+
   const habitsWithDefaults = useMemo(() => (habits || []).map(withDefaults), [habits]);
   const sourceHabitsById = useMemo(
     () =>
@@ -1523,13 +1595,21 @@ const HabitsScreen = () => {
         const parsed = new Date(row?.date);
         if (Number.isNaN(parsed.getTime())) return;
         const key = toDateKey(parsed);
-        const rawAmount = Number(row?.amount);
-        const amount = Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : 1;
+        const rawAmount =
+          row?.amount === null || row?.amount === undefined ? 1 : Number(row.amount);
+        const amount = Number.isFinite(rawAmount) ? rawAmount : 1;
         progressByDate[key] = amount;
       });
+      const skippedDates = Object.entries(progressByDate)
+        .filter(([, amount]) => isHabitSkippedAmount(amount))
+        .map(([key]) => key);
       const completedDates = Object.entries(progressByDate)
         .filter(([, amount]) =>
-          isQuitHabit ? amount <= goalValue : amount >= goalValue
+          isHabitSkippedAmount(amount)
+            ? false
+            : isQuitHabit
+              ? amount <= goalValue
+              : amount >= goalValue
         )
         .map(([key]) => key);
       const groupName =
@@ -1582,7 +1662,13 @@ const HabitsScreen = () => {
         ...mergedHabit,
         progressByDate,
         completedDates,
-        streak: computeCurrentStreakFromDateKeys(completedDates, mergedHabit.goalPeriod || 'day'),
+        skippedDates,
+        streak: computeCurrentStreakFromDateKeys(
+          completedDates,
+          mergedHabit.goalPeriod || 'day',
+          new Date(),
+          skippedDates
+        ),
         __isGroupHabit: true,
       });
     },
@@ -1632,8 +1718,16 @@ const HabitsScreen = () => {
   const selectedHabitAmount = selectedHabit
     ? getDateProgressAmount(selectedHabit, selectedDateKey, localProgressMap)
     : 0;
+  const selectedHabitSkippedForDate = selectedHabit
+    ? isHabitSkippedForDate(selectedHabit, selectedDateKey, localProgressMap)
+    : false;
   const selectedHabitRatio = selectedHabit
-    ? getCompletionRatio(selectedHabit, selectedHabitAmount, selectedDate)
+    ? getCompletionRatio(
+        selectedHabit,
+        selectedHabitAmount,
+        selectedDate,
+        selectedHabitSkippedForDate
+      )
     : 0;
   const selectedHabitPercent = Math.round(selectedHabitRatio * 100);
   const selectedHabitGoalValue = selectedHabit ? getGoalValue(selectedHabit) : 1;
@@ -1644,8 +1738,13 @@ const HabitsScreen = () => {
     : false;
   const selectedHabitCompletions = selectedHabit?.completedDates?.length || 0;
   const selectedHabitBestStreak = useMemo(
-    () => computeBestStreakFromDateKeys(selectedHabit?.completedDates || [], selectedHabit?.goalPeriod || 'day'),
-    [selectedHabit?.completedDates, selectedHabit?.goalPeriod]
+    () =>
+      computeBestStreakFromDateKeys(
+        selectedHabit?.completedDates || [],
+        selectedHabit?.goalPeriod || 'day',
+        selectedHabit?.skippedDates || []
+      ),
+    [selectedHabit?.completedDates, selectedHabit?.goalPeriod, selectedHabit?.skippedDates]
   );
   const selectedHabitGoalsThisMonth = useMemo(() => {
     if (!selectedHabit) return 0;
@@ -1659,7 +1758,12 @@ const HabitsScreen = () => {
     }).length;
   }, [monthAnchor, selectedHabit]);
   const selectedHabitCompletedForDate = selectedHabit
-    ? isCompletedForDate(selectedHabit, selectedDateKey, selectedHabitAmount)
+    ? isCompletedForDate(
+        selectedHabit,
+        selectedDateKey,
+        selectedHabitAmount,
+        selectedHabitSkippedForDate
+      )
     : false;
   const selectedDatePrimaryLabel = isSameDay(selectedDate, new Date())
     ? 'Today'
@@ -1705,6 +1809,7 @@ const HabitsScreen = () => {
         if (isHabitScheduledForDate(habit, selectedDate)) return true;
         const amount = getDateProgressAmount(habit, selectedDateKey, localProgressMap);
         if (amount > 0) return true;
+        if (isHabitSkippedForDate(habit, selectedDateKey, localProgressMap)) return true;
         return (habit.completedDates || []).includes(selectedDateKey);
       });
     },
@@ -1716,7 +1821,8 @@ const HabitsScreen = () => {
       if (selectedCategory === 'Achieved') return dueHabits.length;
       return dueHabits.filter((habit) => {
         const amount = getDateProgressAmount(habit, selectedDateKey, localProgressMap);
-        return isCompletedForDate(habit, selectedDateKey, amount);
+        const skipped = isHabitSkippedForDate(habit, selectedDateKey, localProgressMap);
+        return isCompletedForDate(habit, selectedDateKey, amount, skipped);
       }).length;
     },
     [dueHabits, selectedCategory, selectedDateKey, localProgressMap]
@@ -2056,7 +2162,8 @@ const HabitsScreen = () => {
       if (isHabitsInteractionLocked) return;
       if (hasHabitReachedEndDate(habit, new Date())) return;
       const amount = Math.max(0, parseNumber(amountValue, 0));
-      const localKey = `${habit.id}|${selectedDateKey}`;
+      ensureResetProgressBaseline(habit, selectedDateKey);
+      const localKey = getHabitProgressCacheKey(habit, selectedDateKey);
       setLocalProgressMap((prev) => ({ ...prev, [localKey]: amount }));
       const clearLocalProgressOverride = (expectedAmount) => {
         setLocalProgressMap((prev) => {
@@ -2098,6 +2205,7 @@ const HabitsScreen = () => {
       }
     },
     [
+      ensureResetProgressBaseline,
       isHabitsInteractionLocked,
       isHabitCompletedToday,
       isSelectedDateToday,
@@ -2110,10 +2218,59 @@ const HabitsScreen = () => {
     ]
   );
 
+  const applySkipState = useCallback(
+    async (habit, skipped) => {
+      if (isHabitsInteractionLocked) return;
+      if (hasHabitReachedEndDate(habit, new Date())) return;
+      ensureResetProgressBaseline(habit, selectedDateKey);
+      const localKey = getHabitProgressCacheKey(habit, selectedDateKey);
+      const localValue = skipped ? SKIPPED_HABIT_AMOUNT : 0;
+      setLocalProgressMap((prev) => ({ ...prev, [localKey]: localValue }));
+      const clearLocalProgressOverride = (expectedAmount) => {
+        setLocalProgressMap((prev) => {
+          if (!Object.prototype.hasOwnProperty.call(prev, localKey)) return prev;
+          if (parseNumber(prev[localKey], 0) !== expectedAmount) return prev;
+          const next = { ...prev };
+          delete next[localKey];
+          return next;
+        });
+      };
+
+      try {
+        if (habit?.__isGroupHabit) {
+          if (!isSelectedDateToday || typeof setGroupHabitSkipped !== 'function') return false;
+          const updated = await setGroupHabitSkipped(habit.id, skipped, {
+            dateISO: selectedDateISO,
+          });
+          return updated !== false;
+        }
+
+        if (typeof setHabitSkipped === 'function' && isSelectedDateToday) {
+          const updated = await setHabitSkipped(habit.id, skipped, selectedDateISO);
+          return updated !== false;
+        }
+
+        return false;
+      } finally {
+        clearLocalProgressOverride(localValue);
+      }
+    },
+    [
+      ensureResetProgressBaseline,
+      isHabitsInteractionLocked,
+      isSelectedDateToday,
+      selectedDateISO,
+      selectedDateKey,
+      setGroupHabitSkipped,
+      setHabitSkipped,
+    ]
+  );
+
   const handleQuickAddProgress = useCallback(
     async (habit) => {
       if (!habit || !isSelectedDateToday || isHabitsInteractionLocked) return;
       if (hasHabitReachedEndDate(habit, new Date())) return;
+      if (isHabitSkippedForDate(habit, selectedDateKey, localProgressMapRef.current)) return;
 
       const currentAmount = Math.max(
         0,
@@ -2496,6 +2653,10 @@ const HabitsScreen = () => {
         setShowDetailModal(true);
         return;
       }
+      if (isHabitSkippedForDate(item, selectedDateKey, localProgressMapRef.current)) {
+        setShowDetailModal(true);
+        return;
+      }
       const currentAmount = getDateProgressAmount(
         item,
         selectedDateKey,
@@ -2518,16 +2679,22 @@ const HabitsScreen = () => {
 
   const handleHabitSkip = useCallback(
     async (item) => {
-      await applyProgress(item, 0);
+      const skipped = isHabitSkippedForDate(item, selectedDateKey, localProgressMapRef.current);
+      await applySkipState(item, !skipped);
     },
-    [applyProgress]
+    [applySkipState, selectedDateKey]
   );
 
   const handleHabitReset = useCallback(
     async (item) => {
-      await applyProgress(item, 0);
+      const resetAmount = ensureResetProgressBaseline(item, selectedDateKey);
+      if (isHabitSkippedAmount(resetAmount)) {
+        await applySkipState(item, true);
+        return;
+      }
+      await applyProgress(item, resetAmount);
     },
-    [applyProgress]
+    [applyProgress, applySkipState, ensureResetProgressBaseline, selectedDateKey]
   );
 
   const handleHabitDelete = useCallback(
@@ -2541,12 +2708,14 @@ const HabitsScreen = () => {
     () =>
       filteredHabits.map((habit) => {
         const amount = getDateProgressAmount(habit, selectedDateKey, localProgressMap);
+        const skipped = isHabitSkippedForDate(habit, selectedDateKey, localProgressMap);
         const lifecycleCompleted = hasHabitReachedEndDate(habit, new Date());
         return {
           habit,
           amount,
-          ratio: getCompletionRatio(habit, amount, selectedDate),
-          completed: isCompletedForDate(habit, selectedDateKey, amount),
+          skipped,
+          ratio: getCompletionRatio(habit, amount, selectedDate, skipped),
+          completed: isCompletedForDate(habit, selectedDateKey, amount, skipped),
           overdone: (habit.habitType || 'build') === 'quit' && amount > getGoalValue(habit),
           lifecycleCompleted,
         };
@@ -2762,13 +2931,14 @@ const HabitsScreen = () => {
           </View>
         ) : (
           habitCardItems.map(
-            ({ habit, amount, ratio, completed, overdone, lifecycleCompleted }) => (
+            ({ habit, amount, ratio, completed, skipped, overdone, lifecycleCompleted }) => (
               <SwipeHabitCard
                 key={`${habit.__isGroupHabit ? 'group' : 'personal'}-${habit.id}`}
                 habit={habit}
                 progress={amount}
                 ratio={ratio}
                 completed={completed}
+                skipped={skipped}
                 achieved={lifecycleCompleted}
                 overdone={overdone}
                 streakFrozen={streakFrozen}
@@ -3852,9 +4022,13 @@ const HabitsScreen = () => {
 
                   <View style={[styles.progressCircle, { borderColor: selectedHabitColor }]}>
                     <View style={[styles.progressCircleInner, { backgroundColor: withAlpha(selectedHabitColor, 0.07) }]}>
-                      <Text style={[styles.progressPercent, { color: palette.text }]}>{selectedHabitPercent}%</Text>
+                      <Text style={[styles.progressPercent, { color: palette.text }]}>
+                        {selectedHabitSkippedForDate ? 'Skipped' : `${selectedHabitPercent}%`}
+                      </Text>
                       <Text style={[styles.progressAmountTextLight, { color: palette.textMuted }]}>
-                        {Math.round(selectedHabitAmount)}/{selectedHabitGoalValue} {selectedHabit.goalUnit || 'times'}
+                        {selectedHabitSkippedForDate
+                          ? 'Unskip to track progress again'
+                          : `${Math.round(selectedHabitAmount)}/${selectedHabitGoalValue} ${selectedHabit.goalUnit || 'times'}`}
                       </Text>
                     </View>
                   </View>
@@ -3875,6 +4049,10 @@ const HabitsScreen = () => {
                     ]}
                     onPress={() => {
                       if (!isSelectedDateToday || selectedHabitLifecycleCompleted) return;
+                      if (selectedHabitSkippedForDate) {
+                        applySkipState(selectedHabit, false);
+                        return;
+                      }
                       if (selectedHabitIsQuit) {
                         applyProgress(
                           selectedHabit,
@@ -3894,6 +4072,8 @@ const HabitsScreen = () => {
                         ? 'Habit fully completed'
                         : !isSelectedDateToday
                         ? 'Only today can be updated'
+                        : selectedHabitSkippedForDate
+                        ? 'Unskip day'
                         : selectedHabitIsQuit
                           ? selectedHabitIsOverdone
                             ? 'Clear overdone status'

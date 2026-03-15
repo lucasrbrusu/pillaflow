@@ -889,6 +889,60 @@ const computeCurrentHabitStreak = (completedDates = [], goalPeriod = 'day', refe
   return streak;
 };
 
+const SKIPPED_HABIT_AMOUNT = -1;
+
+const isHabitSkippedAmount = (amount) => Number(amount) === SKIPPED_HABIT_AMOUNT;
+
+const getUniquePeriodIndicesFromDateKeys = (dateKeys = [], goalPeriod = 'day') =>
+  Array.from(
+    new Set(
+      (dateKeys || [])
+        .map((value) => getStreakPeriodIndex(value, goalPeriod))
+        .filter((index) => Number.isFinite(index))
+    )
+  ).sort((a, b) => a - b);
+
+const getSkippedDateKeysFromProgressMap = (progressByDate = {}) =>
+  Object.entries(progressByDate || {})
+    .filter(([, rawAmount]) => isHabitSkippedAmount(rawAmount))
+    .map(([dateKey]) => dateKey);
+
+const computeCurrentHabitStreakWithSkips = (
+  completedDates = [],
+  skippedDates = [],
+  goalPeriod = 'day',
+  referenceDate = new Date()
+) => {
+  const completedIndices = getUniquePeriodIndicesFromDateKeys(completedDates, goalPeriod);
+  if (!completedIndices.length) return 0;
+
+  const currentPeriodIndex = getStreakPeriodIndex(referenceDate, goalPeriod);
+  if (!Number.isFinite(currentPeriodIndex)) return 0;
+
+  const completedSet = new Set(completedIndices);
+  const skippedSet = new Set(getUniquePeriodIndicesFromDateKeys(skippedDates, goalPeriod));
+  let cursor = currentPeriodIndex;
+
+  if (!completedSet.has(cursor) && !skippedSet.has(cursor)) {
+    cursor -= 1;
+  }
+
+  while (skippedSet.has(cursor)) {
+    cursor -= 1;
+  }
+
+  let streak = 0;
+  while (completedSet.has(cursor)) {
+    streak += 1;
+    cursor -= 1;
+    while (skippedSet.has(cursor)) {
+      cursor -= 1;
+    }
+  }
+
+  return streak;
+};
+
 const isQuitHabit = (habit = {}) =>
   (habit?.habitType || habit?.habit_type || 'build') === 'quit';
 
@@ -961,6 +1015,10 @@ const computeQuitHabitStreak = (habit = {}, options = {}) => {
 const computeHabitStreak = (habit = {}, options = {}) => {
   const completedDates = options?.completedDates || habit?.completedDates || [];
   const progressByDate = options?.progressByDate || habit?.progressByDate || {};
+  const skippedDates =
+    options?.skippedDates ||
+    habit?.skippedDates ||
+    getSkippedDateKeysFromProgressMap(progressByDate);
   const goalPeriod = habit?.goalPeriod || habit?.goal_period || 'day';
   const referenceDate = options?.referenceDate || new Date();
 
@@ -972,23 +1030,26 @@ const computeHabitStreak = (habit = {}, options = {}) => {
   if (isQuitHabit(habit)) {
     return computeQuitHabitStreak(habit, { progressByDate, referenceDate });
   }
-  return computeCurrentHabitStreak(completedDates, goalPeriod, referenceDate);
+  return computeCurrentHabitStreakWithSkips(
+    completedDates,
+    skippedDates,
+    goalPeriod,
+    referenceDate
+  );
 };
 
 const isQuitAmountCompleted = (amount, goalValue) => {
   const numericAmount = Number(amount);
   if (!Number.isFinite(numericAmount)) return true;
+  if (isHabitSkippedAmount(numericAmount)) return false;
   return numericAmount <= Math.max(1, Number(goalValue) || 1);
 };
 
 const getUniqueHabitPeriodIndices = (completedDates = [], goalPeriod = 'day') =>
-  Array.from(
-    new Set(
-      (completedDates || [])
-        .map((value) => getStreakPeriodIndex(value, goalPeriod))
-        .filter((index) => Number.isFinite(index))
-    )
-  ).sort((a, b) => a - b);
+  getUniquePeriodIndicesFromDateKeys(completedDates, goalPeriod);
+
+const getUniqueSkippedHabitPeriodIndices = (skippedDates = [], goalPeriod = 'day') =>
+  getUniquePeriodIndicesFromDateKeys(skippedDates, goalPeriod);
 
 const dayNumberToLocalDate = (dayNumber) => {
   if (!Number.isFinite(dayNumber)) return null;
@@ -1002,6 +1063,21 @@ const getAnyHabitCompletionDayNumbers = (habitList = []) =>
     new Set(
       (habitList || []).flatMap((habit) =>
         (Array.isArray(habit?.completedDates) ? habit.completedDates : [])
+          .map((value) => toUtcDayNumberFromLocalDay(value))
+          .filter((dayNumber) => Number.isFinite(dayNumber))
+      )
+    )
+  ).sort((a, b) => a - b);
+
+const getAnyHabitSkippedDayNumbers = (habitList = []) =>
+  Array.from(
+    new Set(
+      (habitList || []).flatMap((habit) =>
+        (
+          Array.isArray(habit?.skippedDates)
+            ? habit.skippedDates
+            : getSkippedDateKeysFromProgressMap(habit?.progressByDate || {})
+        )
           .map((value) => toUtcDayNumberFromLocalDay(value))
           .filter((dayNumber) => Number.isFinite(dayNumber))
       )
@@ -1022,13 +1098,27 @@ const computeCurrentStreakFromHabits = (habitList = [], referenceDate = new Date
   if (!completionDays.length) return 0;
   const currentDayNumber = toUtcDayNumberFromLocalDay(referenceDate);
   if (!Number.isFinite(currentDayNumber)) return 0;
-  const latestCompletionDay = completionDays[completionDays.length - 1];
-  if (currentDayNumber - latestCompletionDay > 1) return 0;
   const completionSet = new Set(completionDays);
-  let streak = 0;
-  for (let cursor = latestCompletionDay; completionSet.has(cursor); cursor -= 1) {
-    streak += 1;
+  const skippedSet = new Set(getAnyHabitSkippedDayNumbers(habitList));
+  let cursor = currentDayNumber;
+
+  if (!completionSet.has(cursor) && !skippedSet.has(cursor)) {
+    cursor -= 1;
   }
+
+  while (skippedSet.has(cursor)) {
+    cursor -= 1;
+  }
+
+  let streak = 0;
+  while (completionSet.has(cursor)) {
+    streak += 1;
+    cursor -= 1;
+    while (skippedSet.has(cursor)) {
+      cursor -= 1;
+    }
+  }
+
   return streak;
 };
 
@@ -1054,16 +1144,28 @@ const getMissedCurrentStreakMeta = (
   const currentDay = toUtcDayNumberFromLocalDay(referenceDate);
   if (!Number.isFinite(currentDay)) return null;
 
-  const missedPeriodCount = currentDay - latestCompletionDay - 1;
-  if (missedPeriodCount < 1) return null;
+  const completionSet = new Set(getAnyHabitCompletionDayNumbers(habitList));
+  completionSet.add(latestCompletionDay);
+  const skippedSet = new Set(getAnyHabitSkippedDayNumbers(habitList));
+  const missedDayNumbers = [];
 
-  const firstMissedAt = dayNumberToLocalDate(latestCompletionDay + 1);
+  for (let cursor = currentDay - 1; cursor > latestCompletionDay; cursor -= 1) {
+    if (skippedSet.has(cursor)) continue;
+    if (completionSet.has(cursor)) break;
+    missedDayNumbers.push(cursor);
+  }
+
+  if (!missedDayNumbers.length) return null;
+
+  const firstMissedDayNumber = missedDayNumbers[missedDayNumbers.length - 1];
+
+  const firstMissedAt = dayNumberToLocalDate(firstMissedDayNumber);
   if (!firstMissedAt || Number.isNaN(firstMissedAt.getTime())) return null;
-  const freezeWindowStartAt = dayNumberToLocalDate(latestCompletionDay + 2);
+  const freezeWindowStartAt = dayNumberToLocalDate(firstMissedDayNumber + 1);
   if (!freezeWindowStartAt || Number.isNaN(freezeWindowStartAt.getTime())) return null;
 
   return {
-    missedPeriodCount,
+    missedPeriodCount: missedDayNumbers.length,
     firstMissedAt,
     freezeWindowStartAt,
   };
@@ -1101,17 +1203,29 @@ const getMissedHabitPeriodMeta = (habit, referenceDate = new Date()) => {
   if (isQuitHabit(habit)) return null;
 
   const goalPeriod = habit.goalPeriod || 'day';
-  const periodIndices = getUniqueHabitPeriodIndices(habit.completedDates || [], goalPeriod);
-  if (!periodIndices.length) return null;
-
-  const latestCompletedPeriodIndex = periodIndices[periodIndices.length - 1];
   const currentPeriodIndex = getStreakPeriodIndex(referenceDate, goalPeriod);
   if (!Number.isFinite(currentPeriodIndex)) return null;
+  const completedSet = new Set(
+    getUniqueHabitPeriodIndices(habit.completedDates || [], goalPeriod)
+  );
+  if (!completedSet.size) return null;
+  const skippedSet = new Set(
+    getUniqueSkippedHabitPeriodIndices(
+      habit.skippedDates || getSkippedDateKeysFromProgressMap(habit.progressByDate || {}),
+      goalPeriod
+    )
+  );
+  const missedPeriodIndices = [];
 
-  const missedPeriodCount = currentPeriodIndex - latestCompletedPeriodIndex - 1;
-  if (missedPeriodCount < 1) return null;
+  for (let cursor = currentPeriodIndex - 1; cursor >= 0; cursor -= 1) {
+    if (skippedSet.has(cursor)) continue;
+    if (completedSet.has(cursor)) break;
+    missedPeriodIndices.push(cursor);
+  }
 
-  const firstMissedPeriodIndex = latestCompletedPeriodIndex + 1;
+  if (!missedPeriodIndices.length) return null;
+
+  const firstMissedPeriodIndex = missedPeriodIndices[missedPeriodIndices.length - 1];
   const firstMissedAt = getPeriodStartDateFromIndex(firstMissedPeriodIndex, goalPeriod);
   if (!firstMissedAt || Number.isNaN(firstMissedAt.getTime())) return null;
   const freezeWindowStartAt = getPeriodStartDateFromIndex(
@@ -1123,7 +1237,7 @@ const getMissedHabitPeriodMeta = (habit, referenceDate = new Date()) => {
   return {
     habitId: habit.id,
     goalPeriod,
-    missedPeriodCount,
+    missedPeriodCount: missedPeriodIndices.length,
     firstMissedAt,
     freezeWindowStartAt,
   };
@@ -2401,15 +2515,21 @@ const markDataLoaded = useCallback((key) => {
       if (!Array.isArray(parsed)) return null;
       const normalizedHabits = parsed
         .filter((habit) => habit && typeof habit === 'object' && habit.id)
-        .map((habit) => ({
-          ...habit,
-          streak: Math.max(0, Number(habit?.streak) || 0),
-          completedDates: Array.isArray(habit?.completedDates) ? habit.completedDates : [],
-          progressByDate:
+        .map((habit) => {
+          const progressByDate =
             habit?.progressByDate && typeof habit.progressByDate === 'object'
               ? habit.progressByDate
-              : {},
-        }));
+              : {};
+          return {
+            ...habit,
+            streak: Math.max(0, Number(habit?.streak) || 0),
+            completedDates: Array.isArray(habit?.completedDates) ? habit.completedDates : [],
+            skippedDates: Array.isArray(habit?.skippedDates)
+              ? habit.skippedDates
+              : getSkippedDateKeysFromProgressMap(progressByDate),
+            progressByDate,
+          };
+        });
       setHabits(normalizedHabits);
       return normalizedHabits;
     } catch (err) {
@@ -4599,11 +4719,13 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
           (completionRows || []).forEach((row) => {
             if (!row?.group_habit_id) return;
             const list = completionMap[row.group_habit_id] || [];
+            const parsedAmount =
+              row?.amount === null || row?.amount === undefined ? null : Number(row.amount);
             list.push({
               habitId: row.group_habit_id,
               userId: row.user_id,
               date: normalizeDateKey(row.date),
-              amount: Number(row.amount) || null,
+              amount: Number.isFinite(parsedAmount) ? parsedAmount : null,
             });
             completionMap[row.group_habit_id] = list;
           });
@@ -4957,10 +5079,11 @@ const serializeAchievementUnlocksForProfile = (unlockMap = {}) =>
       const existing = completions.find(
         (c) => c.userId === authUser.id && normalizeDateKey(c.date) === targetDateISO
       );
+      const existingIsSkipped = isHabitSkippedAmount(existing?.amount);
       const nextAmount =
         amountOverride !== null
           ? amountOverride
-          : existing
+          : existing && !existingIsSkipped
           ? 0
           : Math.max(1, Number(groupHabit?.goalValue) || 1);
       const previousCompletionsForHabit = [...completions];
@@ -6731,6 +6854,7 @@ const fetchHabitsFromSupabase = async (userId, _groupListParam) => {
     const habitType = h.habit_type || 'build';
     const quitHabit = habitType === 'quit';
     const habitProgressByDate = progressByHabit[h.id] || {};
+    const skippedDates = getSkippedDateKeysFromProgressMap(habitProgressByDate);
     const completedDates = (completionRowsByHabit[h.id] || [])
       .filter((entry) => {
         if (entry.amount === null || entry.amount === undefined) return true;
@@ -6753,6 +6877,7 @@ const fetchHabitsFromSupabase = async (userId, _groupListParam) => {
       streak: h.streak || 0,
       createdAt: h.created_at,
       completedDates,
+      skippedDates,
       progressByDate: habitProgressByDate,
       habitType,
       goalPeriod,
@@ -6774,6 +6899,7 @@ const fetchHabitsFromSupabase = async (userId, _groupListParam) => {
     };
     const computedStreak = computeHabitStreak(mappedHabit, {
       completedDates,
+      skippedDates,
       progressByDate: habitProgressByDate,
     });
     const missedMeta = getMissedHabitPeriodMeta(mappedHabit, referenceNow);
@@ -6781,10 +6907,17 @@ const fetchHabitsFromSupabase = async (userId, _groupListParam) => {
       canUseStreakFreeze &&
       (Number(h.streak) || 0) > 0 &&
       isWithinFreezeWindow(missedMeta?.freezeWindowStartAt || null, referenceNow);
-    mappedHabit.streak = isFreezeProtectedHabit ? Number(h.streak) || 0 : computedStreak;
+    const shouldPreserveSkippedTodayStreak =
+      skippedDates.includes(toLocalDateKey(referenceNow)) &&
+      (Number(h.streak) || 0) > computedStreak;
+    mappedHabit.streak =
+      isFreezeProtectedHabit || shouldPreserveSkippedTodayStreak
+        ? Number(h.streak) || 0
+        : computedStreak;
     if (
       h.user_id === userId &&
       !isFreezeProtectedHabit &&
+      !shouldPreserveSkippedTodayStreak &&
       (Number(h.streak) || 0) !== computedStreak
     ) {
       streakCorrections.push({ id: h.id, streak: computedStreak });
@@ -6962,10 +7095,14 @@ const addHabit = async (habit) => {
     createdAt: data.created_at,
     streak: data.streak || 0,
     completedDates: [],
+    skippedDates: [],
     progressByDate: {},
   };
   if (isQuitHabit(newHabit)) {
-    newHabit.streak = computeHabitStreak(newHabit, { progressByDate: {} });
+    newHabit.streak = computeHabitStreak(newHabit, {
+      skippedDates: [],
+      progressByDate: {},
+    });
   }
 
   setHabits((prev) => [...prev, newHabit]);
@@ -6997,6 +7134,7 @@ const updateHabit = async (habitId, updates) => {
     const mergedHabit = { ...(existingHabit || {}), ...localUpdates };
     localUpdates.streak = computeHabitStreak(mergedHabit, {
       completedDates: existingHabit?.completedDates || [],
+      skippedDates: existingHabit?.skippedDates || [],
       progressByDate: existingHabit?.progressByDate || {},
     });
   }
@@ -7249,6 +7387,9 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
   const lifecycleCompletedAtTargetDate = hasHabitLifecycleCompleted(habit, dateValue);
   const isTargetToday = dateKey === todayKey;
   const existingAmountOnDate = Number((habit.progressByDate || {})[dateKey]) || 0;
+  const currentSkippedDates = Array.isArray(habit.skippedDates)
+    ? habit.skippedDates
+    : getSkippedDateKeysFromProgressMap(habit.progressByDate || {});
   const wasCompletedOnTargetDate = quitHabit
     ? isQuitAmountCompleted(existingAmountOnDate, goalValue)
     : (habit.completedDates || []).includes(dateKey);
@@ -7261,6 +7402,7 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
     }
     return current;
   })();
+  const nextSkippedDates = currentSkippedDates.filter((value) => value !== dateKey);
   const nextProgressByDate = {
     ...(habit.progressByDate || {}),
     [dateKey]: numericAmount,
@@ -7275,10 +7417,12 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
     {
       ...habit,
       completedDates: nextCompletedDates,
+      skippedDates: nextSkippedDates,
       progressByDate: nextProgressByDate,
     },
     {
       completedDates: nextCompletedDates,
+      skippedDates: nextSkippedDates,
       progressByDate: nextProgressByDate,
     }
   );
@@ -7292,12 +7436,16 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
   const buildUpdatedHabitForSnapshot = (item) => {
     if (item.id !== habitId) return item;
     let itemCompletedDates = item.completedDates || [];
+    let itemSkippedDates = Array.isArray(item.skippedDates)
+      ? item.skippedDates
+      : getSkippedDateKeysFromProgressMap(item.progressByDate || {});
     if (shouldComplete && !itemCompletedDates.includes(dateKey)) {
       itemCompletedDates = [...itemCompletedDates, dateKey];
     }
     if (!shouldComplete && itemCompletedDates.includes(dateKey)) {
       itemCompletedDates = itemCompletedDates.filter((value) => value !== dateKey);
     }
+    itemSkippedDates = itemSkippedDates.filter((value) => value !== dateKey);
     const itemNextProgressByDate = {
       ...(item.progressByDate || {}),
       [dateKey]: numericAmount,
@@ -7306,10 +7454,12 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
       {
         ...item,
         completedDates: itemCompletedDates,
+        skippedDates: itemSkippedDates,
         progressByDate: itemNextProgressByDate,
       },
       {
         completedDates: itemCompletedDates,
+        skippedDates: itemSkippedDates,
         progressByDate: itemNextProgressByDate,
       }
     );
@@ -7317,6 +7467,7 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
     return {
       ...item,
       completedDates: itemCompletedDates,
+      skippedDates: itemSkippedDates,
       streak: shouldPreserveFrozenStreak
         ? Math.max(itemComputedStreak, (item.streak || 0) + 1)
         : itemComputedStreak,
@@ -7524,10 +7675,391 @@ const setHabitProgress = async (habitId, amount = 0, dateISO = null, options = {
   return true;
 };
 
+const setHabitSkipped = async (
+  habitId,
+  skipped = true,
+  dateISO = null,
+  options = {}
+) => {
+  if (!authUser?.id || !habitId) return false;
+
+  const dateValue = normalizeDateKey(dateISO) || toLocalDateISO(new Date());
+  const dateKey = toLocalDateKey(dateValue);
+  const todayKey = toLocalDateKey(new Date());
+  const isTargetToday = dateKey === todayKey;
+  const syncLinkedGroupHabits = options?.syncLinkedGroupHabits !== false;
+  const habit = habits.find((item) => item.id === habitId);
+  if (!habit) return false;
+
+  const currentSkippedDates = Array.isArray(habit.skippedDates)
+    ? habit.skippedDates
+    : getSkippedDateKeysFromProgressMap(habit.progressByDate || {});
+  const nextCompletedDates = (habit.completedDates || []).filter((value) => value !== dateKey);
+  const nextSkippedDates = skipped
+    ? currentSkippedDates.includes(dateKey)
+      ? currentSkippedDates
+      : [...currentSkippedDates, dateKey]
+    : currentSkippedDates.filter((value) => value !== dateKey);
+  const nextProgressByDate = { ...(habit.progressByDate || {}) };
+  if (skipped) {
+    nextProgressByDate[dateKey] = SKIPPED_HABIT_AMOUNT;
+  } else if (Object.prototype.hasOwnProperty.call(nextProgressByDate, dateKey)) {
+    delete nextProgressByDate[dateKey];
+  }
+
+  const computedNextStreak = computeHabitStreak(
+    {
+      ...habit,
+      completedDates: nextCompletedDates,
+      skippedDates: nextSkippedDates,
+      progressByDate: nextProgressByDate,
+    },
+    {
+      completedDates: nextCompletedDates,
+      skippedDates: nextSkippedDates,
+      progressByDate: nextProgressByDate,
+    }
+  );
+  const nextStreak =
+    skipped && isTargetToday
+      ? Math.max(computedNextStreak, Math.max(0, Number(habit.streak) || 0))
+      : computedNextStreak;
+
+  const previousHabitsSnapshot = Array.isArray(habits) ? habits : [];
+  const previousCurrentStreakState = normalizeCurrentStreakState(currentStreakState);
+  const buildUpdatedHabitForSnapshot = (item) => {
+    if (item.id !== habitId) return item;
+    const itemCurrentSkippedDates = Array.isArray(item.skippedDates)
+      ? item.skippedDates
+      : getSkippedDateKeysFromProgressMap(item.progressByDate || {});
+    const itemCompletedDates = (item.completedDates || []).filter((value) => value !== dateKey);
+    const itemSkippedDates = skipped
+      ? itemCurrentSkippedDates.includes(dateKey)
+        ? itemCurrentSkippedDates
+        : [...itemCurrentSkippedDates, dateKey]
+      : itemCurrentSkippedDates.filter((value) => value !== dateKey);
+    const itemNextProgressByDate = { ...(item.progressByDate || {}) };
+    if (skipped) {
+      itemNextProgressByDate[dateKey] = SKIPPED_HABIT_AMOUNT;
+    } else if (Object.prototype.hasOwnProperty.call(itemNextProgressByDate, dateKey)) {
+      delete itemNextProgressByDate[dateKey];
+    }
+    const itemComputedStreak = computeHabitStreak(
+      {
+        ...item,
+        completedDates: itemCompletedDates,
+        skippedDates: itemSkippedDates,
+        progressByDate: itemNextProgressByDate,
+      },
+      {
+        completedDates: itemCompletedDates,
+        skippedDates: itemSkippedDates,
+        progressByDate: itemNextProgressByDate,
+      }
+    );
+
+    return {
+      ...item,
+      completedDates: itemCompletedDates,
+      skippedDates: itemSkippedDates,
+      streak:
+        skipped && isTargetToday
+          ? Math.max(itemComputedStreak, Math.max(0, Number(item.streak) || 0))
+          : itemComputedStreak,
+      progressByDate: itemNextProgressByDate,
+    };
+  };
+
+  const nextHabitsSnapshot = previousHabitsSnapshot.map(buildUpdatedHabitForSnapshot);
+  const nextCurrentStreakState =
+    skipped && isTargetToday
+      ? previousCurrentStreakState
+      : buildCurrentStreakStateFromHabits(nextHabitsSnapshot, new Date());
+  const shouldPersistNextCurrentStreakState =
+    nextCurrentStreakState.streak !== previousCurrentStreakState.streak ||
+    nextCurrentStreakState.lastCompletionDayNumber !==
+      previousCurrentStreakState.lastCompletionDayNumber;
+
+  setHabits((prev) => (prev || []).map(buildUpdatedHabitForSnapshot));
+  if (shouldPersistNextCurrentStreakState) {
+    setCurrentStreakState((prev) => {
+      if (
+        prev?.streak === nextCurrentStreakState.streak &&
+        prev?.lastCompletionDayNumber === nextCurrentStreakState.lastCompletionDayNumber
+      ) {
+        return prev;
+      }
+      return nextCurrentStreakState;
+    });
+  }
+
+  const rollbackOptimisticHabitSkip = () => {
+    setHabits(previousHabitsSnapshot);
+    if (shouldPersistNextCurrentStreakState) {
+      setCurrentStreakState((prev) => {
+        if (
+          prev?.streak === previousCurrentStreakState.streak &&
+          prev?.lastCompletionDayNumber === previousCurrentStreakState.lastCompletionDayNumber
+        ) {
+          return prev;
+        }
+        return previousCurrentStreakState;
+      });
+    }
+  };
+
+  const isOnConflictTargetError = (error) => {
+    if (!error) return false;
+    if (error.code === '42P10') return true;
+    const combined = `${error.message || ''} ${error.details || ''} ${error.hint || ''}`.toLowerCase();
+    return (
+      combined.includes('no unique or exclusion constraint') &&
+      combined.includes('on conflict')
+    );
+  };
+
+  let completionWriteError = null;
+  if (skipped) {
+    const payload = {
+      habit_id: habitId,
+      user_id: authUser.id,
+      date: dateValue,
+      amount: SKIPPED_HABIT_AMOUNT,
+    };
+    const conflictTargets = ['habit_id,user_id,date', 'habit_id,date'];
+
+    for (const conflictTarget of conflictTargets) {
+      const { error } = await supabase
+        .from('habit_completions')
+        .upsert(payload, { onConflict: conflictTarget });
+
+      if (!error) {
+        completionWriteError = null;
+        break;
+      }
+
+      completionWriteError = error;
+      if (isMissingColumnError(error, 'amount')) break;
+      const canTryLegacyConflictTarget =
+        conflictTarget === 'habit_id,user_id,date' &&
+        (isOnConflictTargetError(error) || error.code === '23505');
+      if (canTryLegacyConflictTarget) continue;
+      break;
+    }
+  } else {
+    const { error } = await supabase
+      .from('habit_completions')
+      .delete()
+      .eq('habit_id', habitId)
+      .eq('user_id', authUser.id)
+      .eq('date', dateValue);
+    completionWriteError = error || null;
+  }
+
+  if (completionWriteError) {
+    console.log(
+      skipped ? 'Error setting habit skipped state:' : 'Error clearing habit skipped state:',
+      completionWriteError
+    );
+    rollbackOptimisticHabitSkip();
+    return false;
+  }
+
+  const { error: streakWriteError } = await supabase
+    .from('habits')
+    .update({ streak: nextStreak })
+    .eq('id', habitId)
+    .eq('user_id', authUser.id);
+  if (streakWriteError) {
+    console.log('Error updating habit streak:', streakWriteError);
+  }
+
+  if (shouldPersistNextCurrentStreakState) {
+    try {
+      await writeCurrentStreakState(authUser.id, nextCurrentStreakState);
+    } catch (error) {
+      console.log('Error writing current streak state:', error);
+    }
+  }
+
+  if (syncLinkedGroupHabits) {
+    const linkedGroupHabits = (groupHabits || []).filter(
+      (groupHabit) => groupHabit?.sourceHabitId === habitId
+    );
+    for (const linkedGroupHabit of linkedGroupHabits) {
+      const linkedHabitId = linkedGroupHabit?.id;
+      if (!linkedHabitId) continue;
+      const previousLinkedCompletions = [...(groupHabitCompletions[linkedHabitId] || [])];
+      const nextLinkedCompletions = skipped
+        ? [
+            ...previousLinkedCompletions.filter(
+              (entry) =>
+                !(
+                  entry?.userId === authUser.id &&
+                  normalizeDateKey(entry?.date) === dateValue
+                )
+            ),
+            {
+              habitId: linkedHabitId,
+              userId: authUser.id,
+              date: dateValue,
+              amount: SKIPPED_HABIT_AMOUNT,
+            },
+          ]
+        : previousLinkedCompletions.filter(
+            (entry) =>
+              !(
+                entry?.userId === authUser.id &&
+                normalizeDateKey(entry?.date) === dateValue
+              )
+          );
+
+      setGroupHabitCompletions((prev) => ({
+        ...(prev || {}),
+        [linkedHabitId]: nextLinkedCompletions,
+      }));
+
+      if (!skipped) {
+        const { error } = await supabase
+          .from('group_habit_completions')
+          .delete()
+          .eq('group_habit_id', linkedHabitId)
+          .eq('user_id', authUser.id)
+          .eq('date', dateValue);
+        if (error) {
+          console.log('Error clearing linked group habit skipped state:', error);
+          setGroupHabitCompletions((prev) => ({
+            ...(prev || {}),
+            [linkedHabitId]: previousLinkedCompletions,
+          }));
+        }
+        continue;
+      }
+
+      await supabase
+        .from('group_habit_completions')
+        .delete()
+        .eq('group_habit_id', linkedHabitId)
+        .eq('user_id', authUser.id)
+        .eq('date', dateValue);
+
+      const { error } = await supabase
+        .from('group_habit_completions')
+        .insert({
+          group_habit_id: linkedHabitId,
+          user_id: authUser.id,
+          date: dateValue,
+          amount: SKIPPED_HABIT_AMOUNT,
+        });
+      if (error) {
+        console.log('Error setting linked group habit skipped state:', error);
+        setGroupHabitCompletions((prev) => ({
+          ...(prev || {}),
+          [linkedHabitId]: previousLinkedCompletions,
+        }));
+      }
+    }
+  }
+
+  return true;
+};
+
+const setGroupHabitSkipped = async (
+  habitId,
+  skipped = true,
+  options = {}
+) => {
+  if (!authUser?.id || !habitId) return false;
+
+  const providedDate = normalizeDateKey(options?.dateISO);
+  const targetDateISO = providedDate || toLocalDateISO(new Date());
+  const shouldSyncSourceHabit = options?.syncSourceHabit !== false;
+  const groupHabit = (groupHabits || []).find((item) => item.id === habitId) || null;
+  const previousCompletionsForHabit = [...(groupHabitCompletions[habitId] || [])];
+  const nextCompletionsForHabit = skipped
+    ? [
+        ...previousCompletionsForHabit.filter(
+          (entry) =>
+            !(entry?.userId === authUser.id && normalizeDateKey(entry?.date) === targetDateISO)
+        ),
+        {
+          habitId,
+          userId: authUser.id,
+          date: targetDateISO,
+          amount: SKIPPED_HABIT_AMOUNT,
+        },
+      ]
+    : previousCompletionsForHabit.filter(
+        (entry) =>
+          !(entry?.userId === authUser.id && normalizeDateKey(entry?.date) === targetDateISO)
+      );
+
+  const applyLocalGroupCompletions = (nextList) => {
+    setGroupHabitCompletions((prev) => ({
+      ...(prev || {}),
+      [habitId]: nextList,
+    }));
+  };
+
+  applyLocalGroupCompletions(nextCompletionsForHabit);
+
+  if (!skipped) {
+    const { error } = await supabase
+      .from('group_habit_completions')
+      .delete()
+      .eq('group_habit_id', habitId)
+      .eq('user_id', authUser.id)
+      .eq('date', targetDateISO);
+
+    if (error) {
+      console.log('Error clearing group habit skipped state:', error);
+      applyLocalGroupCompletions(previousCompletionsForHabit);
+      return false;
+    }
+
+    if (shouldSyncSourceHabit && groupHabit?.sourceHabitId) {
+      await setHabitSkipped(groupHabit.sourceHabitId, false, targetDateISO, {
+        syncLinkedGroupHabits: false,
+      });
+    }
+    return true;
+  }
+
+  await supabase
+    .from('group_habit_completions')
+    .delete()
+    .eq('group_habit_id', habitId)
+    .eq('user_id', authUser.id)
+    .eq('date', targetDateISO);
+
+  const { error } = await supabase
+    .from('group_habit_completions')
+    .insert({
+      group_habit_id: habitId,
+      user_id: authUser.id,
+      date: targetDateISO,
+      amount: SKIPPED_HABIT_AMOUNT,
+    });
+
+  if (error) {
+    console.log('Error setting group habit skipped state:', error);
+    applyLocalGroupCompletions(previousCompletionsForHabit);
+    return false;
+  }
+
+  if (shouldSyncSourceHabit && groupHabit?.sourceHabitId) {
+    await setHabitSkipped(groupHabit.sourceHabitId, true, targetDateISO, {
+      syncLinkedGroupHabits: false,
+    });
+  }
+  return true;
+};
+
 const isHabitCompletedToday = (habitId) => {
   const habit = habits.find((h) => h.id === habitId);
   if (!habit) return false;
   const today = toLocalDateKey(new Date());
+  if ((habit.skippedDates || []).includes(today)) return false;
   if (isQuitHabit(habit)) {
     const amount = Number((habit.progressByDate || {})[today]) || 0;
     return isQuitAmountCompleted(amount, getHabitGoalValue(habit));
@@ -15163,6 +15695,7 @@ const mapProfileRow = (row) => {
     deleteHabit,
     toggleHabitCompletion,
     setHabitProgress,
+    setHabitSkipped,
     isHabitCompletedToday,
     getCurrentStreak,
     getBestStreak,
@@ -15313,6 +15846,7 @@ const mapProfileRow = (row) => {
     updateGroupHabit,
     deleteGroupHabit,
     toggleGroupHabitCompletion,
+    setGroupHabitSkipped,
     addGroupRoutine,
     updateGroupRoutine,
     deleteGroupRoutine,
