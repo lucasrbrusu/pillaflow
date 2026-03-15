@@ -16,6 +16,10 @@ const androidApiKey = 'goog_pwyWISJSXbUBoSRppNHtySWkYwU';
 
 const ENTITLEMENT_ID = 'premium';
 const DEFAULT_OFFERING_ID = 'default';
+const IOS_DEFAULT_PREMIUM_PRODUCT_IDS = {
+  monthly: 'pillaflow_monthly',
+  annual: 'pillaflow_yearly',
+};
 
 const globalKey = '__PILLAFLOW_REVENUECAT__';
 const globalState = (() => {
@@ -61,6 +65,22 @@ const normalizeAppUserId = (value) => {
   return trimmed ? trimmed : null;
 };
 
+const getPackageProductIdentifier = (pkg) => {
+  const value = pkg?.product?.identifier;
+  return typeof value === 'string' ? value.trim() : '';
+};
+
+const findPackageByProductIdentifier = (offering, productIdentifier) => {
+  const normalizedIdentifier =
+    typeof productIdentifier === 'string' ? productIdentifier.trim() : '';
+  if (!offering || !normalizedIdentifier) return null;
+  return (
+    (offering.availablePackages || []).find(
+      (pkg) => getPackageProductIdentifier(pkg) === normalizedIdentifier
+    ) || null
+  );
+};
+
 export const setRevenueCatUserId = async (userId) => {
   const ok = await configureRevenueCat();
   if (!ok) return false;
@@ -103,6 +123,11 @@ export const setRevenueCatUserId = async (userId) => {
 const matchPackage = (currentOffering, type) => {
   if (!currentOffering) return null;
 
+  if (Platform.OS === 'ios') {
+    const requiredProductIdentifier = IOS_DEFAULT_PREMIUM_PRODUCT_IDS[type] || '';
+    return findPackageByProductIdentifier(currentOffering, requiredProductIdentifier);
+  }
+
   if (type === 'monthly') {
     return (
       currentOffering.monthly ||
@@ -135,6 +160,7 @@ const pickDefaultOffering = (offerings) => {
   if (offerings.all && offerings.all[DEFAULT_OFFERING_ID]) {
     return offerings.all[DEFAULT_OFFERING_ID];
   }
+  if (Platform.OS === 'ios') return null;
   if (offerings.current) return offerings.current;
   const allList = offerings.all ? Object.values(offerings.all) : [];
   return allList.find(Boolean) || null;

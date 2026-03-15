@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Image,
+  Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -121,10 +122,15 @@ const PaywallScreen = () => {
       setLoadingError('');
       try {
         await configureRevenueCat();
-        const { monthly, annual } = await loadOfferingPackages();
+        const { offering, monthly, annual } = await loadOfferingPackages();
         if (!mounted) return;
         setMonthlyPackage(monthly || null);
         setAnnualPackage(annual || null);
+        if (Platform.OS === 'ios' && (!offering || !monthly || !annual)) {
+          setLoadingError(
+            'RevenueCat iOS premium must use the default offering with pillaflow_monthly and pillaflow_yearly.'
+          );
+        }
       } catch (err) {
         if (!mounted) return;
         setLoadingError(err?.message || 'Unable to load plans right now.');
