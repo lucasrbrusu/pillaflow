@@ -253,12 +253,31 @@ const getPackageFreeTrialOffer = (pkg) => {
   return null;
 };
 
-const hasSubscriptionHistory = (info) => {
-  const subscriptionsByProductIdentifier = info?.subscriptionsByProductIdentifier;
-  return !!(
-    subscriptionsByProductIdentifier &&
-    Object.keys(subscriptionsByProductIdentifier).length
+const getAllPremiumProductIdentifiers = () => {
+  const identifiers = Object.values(PREMIUM_PRODUCT_IDS_BY_PLATFORM || {}).flatMap((entry) =>
+    Object.values(entry || {})
   );
+  return Array.from(
+    new Set(
+      identifiers
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    )
+  );
+};
+
+const hasPremiumSubscriptionHistory = (info) => {
+  const premiumIdentifiers = getAllPremiumProductIdentifiers();
+  if (!premiumIdentifiers.length) return false;
+
+  const knownPurchasedIdentifiers = new Set([
+    ...Object.keys(info?.subscriptionsByProductIdentifier || {}),
+    ...(Array.isArray(info?.allPurchasedProductIdentifiers)
+      ? info.allPurchasedProductIdentifiers
+      : []),
+  ]);
+
+  return premiumIdentifiers.some((identifier) => knownPurchasedIdentifiers.has(identifier));
 };
 
 const pickDefaultOffering = (offerings) => {
@@ -272,8 +291,9 @@ const pickDefaultOffering = (offerings) => {
   return allList.find(Boolean) || null;
 };
 
-export const loadOfferingPackages = async () => {
-  const ok = await configureRevenueCat();
+export const loadOfferingPackages = async (appUserId) => {
+  const ok =
+    appUserId === undefined ? await configureRevenueCat() : await setRevenueCatUserId(appUserId);
   if (!ok) {
     return { offering: null, monthly: null, annual: null };
   }
@@ -304,24 +324,39 @@ export const getEligibleFreeTrialOfferForPackage = async (pkg, appUserId) => {
     }
   }
 
-  if (hasSubscriptionHistory(customerInfo)) return null;
+  if (hasPremiumSubscriptionHistory(customerInfo)) return null;
 
   if (Platform.OS === 'ios') {
-    try {
-      const productIdentifier = getPackageProductIdentifier(pkg);
-      if (!productIdentifier) return null;
+    const productIdentifier = getPackageProductIdentifier(pkg);
+    if (!productIdentifier) return null;
 
+    try {
       const eligibilityByProduct =
         await Purchases.checkTrialOrIntroductoryPriceEligibility([productIdentifier]);
+      const status = eligibilityByProduct?.[productIdentifier]?.status;
       const eligibleStatus =
         Purchases.INTRO_ELIGIBILITY_STATUS?.INTRO_ELIGIBILITY_STATUS_ELIGIBLE ?? 2;
+      const unknownStatus =
+        Purchases.INTRO_ELIGIBILITY_STATUS?.INTRO_ELIGIBILITY_STATUS_UNKNOWN ?? 0;
+      const ineligibleStatus =
+        Purchases.INTRO_ELIGIBILITY_STATUS?.INTRO_ELIGIBILITY_STATUS_INELIGIBLE ?? 1;
+      const noIntroStatus =
+        Purchases.INTRO_ELIGIBILITY_STATUS?.INTRO_ELIGIBILITY_STATUS_NO_INTRO_OFFER_EXISTS ?? 3;
 
-      if (eligibilityByProduct?.[productIdentifier]?.status !== eligibleStatus) {
+      if (status === ineligibleStatus || status === noIntroStatus) {
+        return null;
+      }
+
+      // iOS can legitimately return UNKNOWN in sandbox or when Apple group data
+      // isn't available yet. If the account has no premium purchase history and
+      // the package exposes a free trial, keep the offer visible.
+      if (status !== undefined && status !== null && status !== eligibleStatus && status !== unknownStatus) {
         return null;
       }
     } catch (error) {
       console.warn('RevenueCat intro eligibility check failed', error);
-      return null;
+      // Fallback: if RevenueCat exposes a free trial on the package and we
+      // couldn't find prior premium history, still treat the user as eligible.
     }
   }
 

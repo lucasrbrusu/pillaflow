@@ -136,7 +136,7 @@ const PaywallScreen = () => {
       setMonthlyTrialOffer(null);
       try {
         await configureRevenueCat();
-        const { offering, monthly, annual } = await loadOfferingPackages();
+        const { offering, monthly, annual } = await loadOfferingPackages(authUser?.id);
         const eligibleMonthlyTrial = monthly
           ? await getEligibleFreeTrialOfferForPackage(monthly, authUser?.id)
           : null;

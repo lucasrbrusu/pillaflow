@@ -12,20 +12,20 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { borderRadius, colors, shadows, spacing, typography } from '../utils/theme';
 
-const PROMO_ITEMS = [
+const PREMIUM_ITEMS = [
   {
-    id: 'ai',
+    id: 'agent',
     icon: 'sparkles-outline',
     iconColor: '#7c3aed',
     iconBg: '#f3e8ff',
-    label: 'AI agent and premium planning tools',
+    label: 'AI agent and smarter planning tools',
   },
   {
     id: 'insights',
     icon: 'analytics-outline',
     iconColor: '#2563eb',
     iconBg: '#dbeafe',
-    label: 'Weekly insights and advanced analytics',
+    label: 'Advanced insights and analytics',
   },
   {
     id: 'groups',
@@ -36,47 +36,46 @@ const PROMO_ITEMS = [
   },
   {
     id: 'extras',
-    icon: 'ribbon-outline',
+    icon: 'shield-checkmark-outline',
     iconColor: '#db2777',
     iconBg: '#fce7f3',
-    label: 'Premium badge, streak protection, and more',
+    label: 'Priority extras, streak protection, and more',
   },
 ];
 
-const PremiumTrialOverlay = ({
+const PremiumUnlockOverlay = ({
   visible,
   onClose,
-  onStartTrial,
+  onUnlock,
   onDontAskAgain,
-  trialLabel = '7-day Free Trial',
   themeColors = colors,
 }) => {
-  const [isStarting, setIsStarting] = React.useState(false);
+  const [isOpening, setIsOpening] = React.useState(false);
   const [isSkippingForever, setIsSkippingForever] = React.useState(false);
   const textColor = themeColors?.text || colors.text;
   const mutedColor = themeColors?.textSecondary || colors.textSecondary;
 
   React.useEffect(() => {
     if (!visible) {
-      setIsStarting(false);
+      setIsOpening(false);
       setIsSkippingForever(false);
     }
   }, [visible]);
 
   if (!visible) return null;
 
-  const handleStartTrial = async () => {
-    if (isStarting || isSkippingForever) return;
-    setIsStarting(true);
+  const handleUnlock = async () => {
+    if (isOpening || isSkippingForever) return;
+    setIsOpening(true);
     try {
-      await onStartTrial?.();
+      await onUnlock?.();
     } finally {
-      setIsStarting(false);
+      setIsOpening(false);
     }
   };
 
   const handleDontAskAgain = async () => {
-    if (isStarting || isSkippingForever) return;
+    if (isOpening || isSkippingForever) return;
     setIsSkippingForever(true);
     try {
       await onDontAskAgain?.();
@@ -97,7 +96,7 @@ const PremiumTrialOverlay = ({
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
 
-        <LinearGradient colors={['#FFF9ED', '#FFF2F8', '#F7F3FF']} style={styles.card}>
+        <LinearGradient colors={['#F7F6FF', '#FFF8F0', '#F4FBFF']} style={styles.card}>
           <View style={styles.orbLayer} pointerEvents="none">
             <View style={styles.orbTop} />
             <View style={styles.orbBottom} />
@@ -107,32 +106,32 @@ const PremiumTrialOverlay = ({
             style={styles.closeButton}
             onPress={onClose}
             hitSlop={12}
-            disabled={isStarting || isSkippingForever}
+            disabled={isOpening || isSkippingForever}
           >
             <Ionicons name="close" size={22} color="#646B84" />
           </Pressable>
 
           <View style={styles.heroWrap}>
-            <LinearGradient colors={['#f59e0b', '#ec4899']} style={styles.heroIcon}>
-              <Ionicons name="ribbon" size={30} color="#FFFFFF" />
+            <LinearGradient colors={['#6366F1', '#EC4899']} style={styles.heroIcon}>
+              <Ionicons name="diamond-outline" size={30} color="#FFFFFF" />
             </LinearGradient>
             <View style={styles.sparkleOne}>
               <Ionicons name="sparkles" size={18} color="#F59E0B" />
             </View>
             <View style={styles.sparkleTwo}>
-              <Ionicons name="star" size={16} color="#A855F7" />
+              <Ionicons name="flash-outline" size={16} color="#6366F1" />
             </View>
           </View>
 
-          <Text style={styles.eyebrow}>Premium free trial</Text>
-          <Text style={[styles.title, { color: textColor }]}>Unlock Premium Free</Text>
+          <Text style={styles.eyebrow}>Premium features</Text>
+          <Text style={[styles.title, { color: textColor }]}>Unlock Pillaflow Premium</Text>
           <Text style={[styles.description, { color: mutedColor }]}>
-            If your account is eligible, start your {trialLabel} and explore everything
-            in Pillaflow Premium before monthly billing begins.
+            Upgrade to unlock the full premium experience across planning, insights,
+            collaboration, and advanced tools.
           </Text>
 
           <View style={styles.listCard}>
-            {PROMO_ITEMS.map((item) => (
+            {PREMIUM_ITEMS.map((item) => (
               <View key={item.id} style={styles.listRow}>
                 <View style={[styles.listIconWrap, { backgroundColor: item.iconBg }]}>
                   <Ionicons name={item.icon} size={16} color={item.iconColor} />
@@ -145,24 +144,24 @@ const PremiumTrialOverlay = ({
           <Pressable
             style={({ pressed }) => [
               styles.primaryButton,
-              pressed && !isStarting && !isSkippingForever ? styles.primaryButtonPressed : null,
-              (isStarting || isSkippingForever) && styles.buttonDisabled,
+              pressed && !isOpening && !isSkippingForever ? styles.primaryButtonPressed : null,
+              (isOpening || isSkippingForever) && styles.buttonDisabled,
             ]}
-            onPress={handleStartTrial}
-            disabled={isStarting || isSkippingForever}
+            onPress={handleUnlock}
+            disabled={isOpening || isSkippingForever}
           >
             <LinearGradient
-              colors={['#F59E0B', '#EC4899', '#8B5CF6']}
+              colors={['#6366F1', '#8B5CF6', '#EC4899']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.primaryButtonGradient}
             >
-              {isStarting ? (
+              {isOpening ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <>
-                  <Ionicons name="gift-outline" size={18} color="#FFFFFF" />
-                  <Text style={styles.primaryButtonText}>Start {trialLabel}</Text>
+                  <Ionicons name="lock-open-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.primaryButtonText}>Unlock Premium</Text>
                 </>
               )}
             </LinearGradient>
@@ -170,7 +169,7 @@ const PremiumTrialOverlay = ({
 
           <Pressable
             onPress={handleDontAskAgain}
-            disabled={isStarting || isSkippingForever}
+            disabled={isOpening || isSkippingForever}
             style={styles.secondaryAction}
           >
             {isSkippingForever ? (
@@ -181,7 +180,7 @@ const PremiumTrialOverlay = ({
           </Pressable>
 
           <Text style={[styles.footerNote, { color: mutedColor }]}>
-            You can upgrade later anytime from your profile or any premium feature.
+            You can open premium plans anytime from your profile or any locked feature.
           </Text>
         </LinearGradient>
       </View>
@@ -219,7 +218,7 @@ const styles = StyleSheet.create({
     width: 200,
     height: 200,
     borderRadius: 100,
-    backgroundColor: 'rgba(245, 158, 11, 0.18)',
+    backgroundColor: 'rgba(99, 102, 241, 0.16)',
   },
   orbBottom: {
     position: 'absolute',
@@ -228,7 +227,7 @@ const styles = StyleSheet.create({
     width: 220,
     height: 220,
     borderRadius: 110,
-    backgroundColor: 'rgba(168, 85, 247, 0.12)',
+    backgroundColor: 'rgba(236, 72, 153, 0.12)',
   },
   closeButton: {
     position: 'absolute',
@@ -267,7 +266,7 @@ const styles = StyleSheet.create({
   eyebrow: {
     ...typography.caption,
     textAlign: 'center',
-    color: '#A16207',
+    color: '#4338CA',
     fontWeight: '800',
     textTransform: 'uppercase',
     letterSpacing: 1,
@@ -297,7 +296,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     backgroundColor: 'rgba(255,255,255,0.62)',
     borderWidth: 1,
-    borderColor: '#F3E8FF',
+    borderColor: '#E9E5FF',
     marginBottom: spacing.xl,
   },
   listRow: {
@@ -362,4 +361,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default PremiumTrialOverlay;
+export default PremiumUnlockOverlay;

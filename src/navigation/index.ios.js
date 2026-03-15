@@ -10,6 +10,7 @@ import { colors, shadows, borderRadius } from '../utils/theme';
 import { useApp } from '../context/AppContext';
 import AppTutorialOverlay from '../components/AppTutorialOverlay';
 import NotificationPermissionOverlay from '../components/NotificationPermissionOverlay';
+import PremiumUnlockOverlay from '../components/PremiumUnlockOverlay';
 import PremiumTrialOverlay from '../components/PremiumTrialOverlay';
 import StreakIncreaseToast from '../components/StreakIncreaseToast';
 import {
@@ -83,18 +84,6 @@ const TAB_FADE_START_OPACITY = 0.96;
 const TAB_BAR_CONTAINER_PADDING_HORIZONTAL = 20;
 const TAB_BAR_PADDING_HORIZONTAL = 16;
 const TAB_ICON_CENTER_OFFSET_FROM_BOTTOM = 34;
-
-const hasPremiumHistory = (profile) => {
-  const normalizedPlan = String(profile?.plan || '').trim().toLowerCase();
-  return Boolean(
-    profile?.isPremium ||
-      profile?.premiumExpiresAt ||
-      profile?.premium_expires_at ||
-      normalizedPlan === 'premium' ||
-      normalizedPlan === 'pro' ||
-      normalizedPlan === 'paid'
-  );
-};
 
 const QuickTabFade = ({ children }) => {
   const isFocused = useIsFocused();
@@ -280,6 +269,9 @@ const MainWithChatButton = ({
   freeTrialLabel,
   onCloseFreeTrialPrompt,
   onDontAskAgainFreeTrialPrompt,
+  showPremiumUnlockPrompt,
+  onClosePremiumUnlockPrompt,
+  onDontAskAgainPremiumUnlockPrompt,
   tabBarLayout,
   onTabBarLayout,
   themeColors,
@@ -344,6 +336,16 @@ const MainWithChatButton = ({
         }}
         onDontAskAgain={onDontAskAgainFreeTrialPrompt}
         trialLabel={freeTrialLabel}
+        themeColors={themeColors}
+      />
+      <PremiumUnlockOverlay
+        visible={showPremiumUnlockPrompt}
+        onClose={onClosePremiumUnlockPrompt}
+        onUnlock={() => {
+          onClosePremiumUnlockPrompt?.();
+          navigation.navigate('Paywall', { source: 'premium-unlock-prompt' });
+        }}
+        onDontAskAgain={onDontAskAgainPremiumUnlockPrompt}
         themeColors={themeColors}
       />
     </View>
@@ -439,16 +441,17 @@ const Navigation = () => {
     await dismissPremiumTrialPrompt();
   }, [dismissPremiumTrialPrompt]);
 
-  const shouldCheckFreeTrialPrompt = Boolean(
+  const shouldCheckPremiumPrompt = Boolean(
     authUser?.id &&
       profileLoaded &&
       userSettingsLoaded &&
       !showAppTutorial &&
       !isPremiumActive &&
       !userSettings?.premiumTrialPromptDismissedAt &&
-      !hideFreeTrialPromptForSession &&
-      !hasPremiumHistory(profile)
+      !hideFreeTrialPromptForSession
   );
+
+  const shouldCheckFreeTrialPrompt = shouldCheckPremiumPrompt;
 
   React.useEffect(() => {
     let cancelled = false;
@@ -464,7 +467,7 @@ const Navigation = () => {
     const loadFreeTrialPrompt = async () => {
       setFreeTrialPromptChecked(false);
       try {
-        const { monthly } = await loadOfferingPackages();
+        const { monthly } = await loadOfferingPackages(authUser?.id);
         const offer = monthly
           ? await getEligibleFreeTrialOfferForPackage(monthly, authUser?.id)
           : null;
@@ -491,6 +494,12 @@ const Navigation = () => {
     shouldCheckFreeTrialPrompt && freeTrialPromptChecked && freeTrialLabel
   );
 
+  const shouldShowPremiumUnlockPrompt = Boolean(
+    shouldCheckPremiumPrompt &&
+      freeTrialPromptChecked &&
+      !shouldShowFreeTrialPrompt
+  );
+
   const shouldShowNotificationPrompt = Boolean(
     authUser?.id &&
       profileLoaded &&
@@ -501,8 +510,9 @@ const Navigation = () => {
       !hideNotificationPromptForSession &&
       !hideFreeTrialPromptForSession &&
       !showAppTutorial &&
-      (!shouldCheckFreeTrialPrompt || freeTrialPromptChecked) &&
-      !shouldShowFreeTrialPrompt
+      (!shouldCheckPremiumPrompt || freeTrialPromptChecked) &&
+      !shouldShowFreeTrialPrompt &&
+      !shouldShowPremiumUnlockPrompt
   );
 
   const navTheme = React.useMemo(
@@ -564,6 +574,9 @@ const Navigation = () => {
                   freeTrialLabel={freeTrialLabel || '7-day Free Trial'}
                   onCloseFreeTrialPrompt={handleCloseFreeTrialPrompt}
                   onDontAskAgainFreeTrialPrompt={handleDontAskAgainFreeTrialPrompt}
+                  showPremiumUnlockPrompt={shouldShowPremiumUnlockPrompt}
+                  onClosePremiumUnlockPrompt={handleCloseFreeTrialPrompt}
+                  onDontAskAgainPremiumUnlockPrompt={handleDontAskAgainFreeTrialPrompt}
                   tabBarLayout={tabBarLayout}
                   onTabBarLayout={(event) => setTabBarLayout(event?.nativeEvent?.layout || null)}
                   themeColors={themeColors}
