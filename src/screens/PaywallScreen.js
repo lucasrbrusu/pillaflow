@@ -20,9 +20,11 @@ import { useApp } from '../context/AppContext';
 import {
   configureRevenueCat,
   loadOfferingPackages,
+  getEligibleFreeTrialOfferForPackage,
   purchaseRevenueCatPackage,
   restoreRevenueCatPurchases,
   getPremiumEntitlementStatus,
+  PREMIUM_PRODUCT_IDS_BY_PLATFORM,
 } from '../../RevenueCat';
 
 const featureList = [
@@ -91,6 +93,13 @@ const featureList = [
   },
 ];
 
+const getPlatformOfferingError = () => {
+  const products = PREMIUM_PRODUCT_IDS_BY_PLATFORM[Platform.OS];
+  if (!products) return '';
+  const platformLabel = Platform.OS === 'ios' ? 'iOS' : 'Android';
+  return `RevenueCat ${platformLabel} premium must use the default offering with ${products.monthly} and ${products.annual}.`;
+};
+
 const PaywallScreen = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
@@ -100,6 +109,7 @@ const PaywallScreen = () => {
   const [loadingError, setLoadingError] = useState('');
   const [monthlyPackage, setMonthlyPackage] = useState(null);
   const [annualPackage, setAnnualPackage] = useState(null);
+  const [monthlyTrialOffer, setMonthlyTrialOffer] = useState(null);
   const [purchasingId, setPurchasingId] = useState('');
   const [restoring, setRestoring] = useState(false);
   const [entitled, setEntitled] = useState(!!isPremium);
@@ -114,25 +124,34 @@ const PaywallScreen = () => {
     [isDark, themeColors, accentColor]
   );
   const source = route.params?.source || '';
+  const platformOfferingError = getPlatformOfferingError();
 
   useEffect(() => {
     let mounted = true;
     const load = async () => {
       setLoading(true);
       setLoadingError('');
+      setMonthlyPackage(null);
+      setAnnualPackage(null);
+      setMonthlyTrialOffer(null);
       try {
         await configureRevenueCat();
         const { offering, monthly, annual } = await loadOfferingPackages();
+        const eligibleMonthlyTrial = monthly
+          ? await getEligibleFreeTrialOfferForPackage(monthly, authUser?.id)
+          : null;
         if (!mounted) return;
         setMonthlyPackage(monthly || null);
         setAnnualPackage(annual || null);
-        if (Platform.OS === 'ios' && (!offering || !monthly || !annual)) {
-          setLoadingError(
-            'RevenueCat iOS premium must use the default offering with pillaflow_monthly and pillaflow_yearly.'
-          );
+        setMonthlyTrialOffer(eligibleMonthlyTrial || null);
+        if (platformOfferingError && (!offering || !monthly || !annual)) {
+          setLoadingError(platformOfferingError);
         }
       } catch (err) {
         if (!mounted) return;
+        setMonthlyPackage(null);
+        setAnnualPackage(null);
+        setMonthlyTrialOffer(null);
         setLoadingError(err?.message || 'Unable to load plans right now.');
       } finally {
         if (mounted) setLoading(false);
@@ -142,7 +161,7 @@ const PaywallScreen = () => {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [authUser?.id, platformOfferingError]);
 
   useEffect(() => {
     let active = true;
@@ -178,7 +197,17 @@ const PaywallScreen = () => {
     return 'Price via RevenueCat';
   };
 
-  const handlePurchase = async (pkg) => {
+  const getRegularMonthlyPrice = (pkg, trialOffer) => {
+    const recurringPrice =
+      trialOffer?.subscriptionOption?.fullPricePhase?.price?.formatted ||
+      pkg?.product?.defaultOption?.fullPricePhase?.price?.formatted;
+    if (recurringPrice) {
+      return recurringPrice;
+    }
+    return formatPrice(pkg);
+  };
+
+  const handlePurchase = async (pkg, purchaseOptions) => {
     if (!pkg) {
       setLoadingError('This plan is not available yet. Check your RevenueCat offering.');
       return;
@@ -187,7 +216,7 @@ const PaywallScreen = () => {
     setPurchasingId(pkg.identifier);
     setLoadingError('');
     try {
-      await purchaseRevenueCatPackage(pkg);
+      await purchaseRevenueCatPackage(pkg, purchaseOptions);
       const status =
         (await refreshRevenueCatPremium()) || (await getPremiumEntitlementStatus(authUser?.id));
       setEntitled(!!status?.isActive || !!isPremium);
@@ -217,10 +246,10 @@ const PaywallScreen = () => {
     }
   };
 
-  const handlePlanPress = (planKey, pkg) => {
+  const handlePlanPress = (planKey, pkg, purchaseOptions) => {
     if (purchasingId || entitled) return;
     setSelectedPlan(planKey);
-    handlePurchase(pkg);
+    handlePurchase(pkg, purchaseOptions);
   };
 
   const getPlanFooterLabel = (planKey, pkg) => {
@@ -231,6 +260,16 @@ const PaywallScreen = () => {
     if (entitled) return 'Premium active';
     return 'Tap to select';
   };
+
+  const monthlyTrialEligible = !!monthlyTrialOffer && !entitled;
+  const monthlyPurchaseOptions = monthlyTrialOffer?.subscriptionOption
+    ? { subscriptionOption: monthlyTrialOffer.subscriptionOption }
+    : undefined;
+  const monthlyPrice = getRegularMonthlyPrice(monthlyPackage, monthlyTrialOffer);
+  const monthlyTrialDetail =
+    monthlyPrice === 'Price via RevenueCat'
+      ? 'Then regular monthly billing starts. Cancel anytime'
+      : `Then ${monthlyPrice} per month. Cancel anytime`;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -316,7 +355,9 @@ const PaywallScreen = () => {
             <>
               <TouchableOpacity
                 activeOpacity={0.92}
-                onPress={() => handlePlanPress('monthly', monthlyPackage)}
+                onPress={() =>
+                  handlePlanPress('monthly', monthlyPackage, monthlyPurchaseOptions)
+                }
                 disabled={!!purchasingId || entitled}
               >
                 <LinearGradient
@@ -331,10 +372,26 @@ const PaywallScreen = () => {
                       <Text style={[styles.planBadgeText, styles.planBadgeTextLight]}>Flexible</Text>
                     </View>
                   </View>
-                  <Text style={[styles.planPrice, styles.planTextLight]}>
-                    {formatPrice(monthlyPackage)}
-                  </Text>
-                  <Text style={[styles.planDetail, styles.planTextLight]}>Cancel anytime</Text>
+                  {monthlyTrialEligible ? (
+                    <>
+                      <Text style={[styles.planPromoPrice, styles.planTextLight]}>
+                        {monthlyTrialOffer.label}
+                      </Text>
+                      <Text style={[styles.planOriginalPrice, styles.planTextLight]}>
+                        {monthlyPrice}
+                      </Text>
+                      <Text style={[styles.planDetail, styles.planTextLight]}>
+                        {monthlyTrialDetail}
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={[styles.planPrice, styles.planTextLight]}>{monthlyPrice}</Text>
+                      <Text style={[styles.planDetail, styles.planTextLight]}>
+                        Cancel anytime
+                      </Text>
+                    </>
+                  )}
                   <View style={styles.planDividerLight} />
                   <View style={styles.planFooter}>
                     {purchasingId === monthlyPackage?.identifier ? (
@@ -628,6 +685,21 @@ const createStyles = ({ isDark, themeColors, accentColor }) => {
       fontWeight: '600',
       marginTop: spacing.sm,
       color: text,
+    },
+    planPromoPrice: {
+      fontSize: 20,
+      fontWeight: '700',
+      marginTop: spacing.sm,
+      color: text,
+    },
+    planOriginalPrice: {
+      fontSize: 14,
+      fontWeight: '600',
+      marginTop: spacing.xs,
+      color: text,
+      opacity: 0.82,
+      textDecorationLine: 'line-through',
+      textDecorationStyle: 'solid',
     },
     planDetail: {
       fontSize: 13,

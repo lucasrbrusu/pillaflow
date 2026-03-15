@@ -18,7 +18,12 @@ import { colors, shadows, borderRadius } from '../utils/theme';
 import { useApp } from '../context/AppContext';
 import AppTutorialOverlay from '../components/AppTutorialOverlay';
 import NotificationPermissionOverlay from '../components/NotificationPermissionOverlay';
+import PremiumTrialOverlay from '../components/PremiumTrialOverlay';
 import StreakIncreaseToast from '../components/StreakIncreaseToast';
+import {
+  getEligibleFreeTrialOfferForPackage,
+  loadOfferingPackages,
+} from '../../RevenueCat';
 
 // Screens
 import HomeScreen from '../screens/HomeScreen';
@@ -86,6 +91,18 @@ const TAB_FADE_START_OPACITY = 0.96;
 const TAB_BAR_CONTAINER_PADDING_HORIZONTAL = 12;
 const TAB_BAR_PADDING_HORIZONTAL = 14;
 const TAB_ICON_CENTER_OFFSET_FROM_BOTTOM = 33;
+
+const hasPremiumHistory = (profile) => {
+  const normalizedPlan = String(profile?.plan || '').trim().toLowerCase();
+  return Boolean(
+    profile?.isPremium ||
+      profile?.premiumExpiresAt ||
+      profile?.premium_expires_at ||
+      normalizedPlan === 'premium' ||
+      normalizedPlan === 'pro' ||
+      normalizedPlan === 'paid'
+  );
+};
 
 const QuickTabFade = ({ children }) => {
   const isFocused = useIsFocused();
@@ -272,6 +289,10 @@ const MainWithChatButton = ({
   onCloseNotificationPrompt,
   onEnableNotificationPrompt,
   onDontAskAgainNotificationPrompt,
+  showFreeTrialPrompt,
+  freeTrialLabel,
+  onCloseFreeTrialPrompt,
+  onDontAskAgainFreeTrialPrompt,
   tabBarLayout,
   onTabBarLayout,
   themeColors,
@@ -327,6 +348,17 @@ const MainWithChatButton = ({
         onDontAskAgain={onDontAskAgainNotificationPrompt}
         themeColors={themeColors}
       />
+      <PremiumTrialOverlay
+        visible={showFreeTrialPrompt}
+        onClose={onCloseFreeTrialPrompt}
+        onStartTrial={() => {
+          onCloseFreeTrialPrompt?.();
+          navigation.navigate('Paywall', { source: 'free-trial-prompt' });
+        }}
+        onDontAskAgain={onDontAskAgainFreeTrialPrompt}
+        trialLabel={freeTrialLabel}
+        themeColors={themeColors}
+      />
     </View>
   );
 };
@@ -352,10 +384,15 @@ const Navigation = () => {
     hasNotificationPermissionChecked,
     requestNotificationPermission,
     dismissNotificationPermissionPrompt,
+    dismissPremiumTrialPrompt,
   } = useApp();
   const [showAppTutorial, setShowAppTutorial] = React.useState(false);
   const [hideNotificationPromptForSession, setHideNotificationPromptForSession] =
     React.useState(false);
+  const [hideFreeTrialPromptForSession, setHideFreeTrialPromptForSession] =
+    React.useState(false);
+  const [freeTrialLabel, setFreeTrialLabel] = React.useState('');
+  const [freeTrialPromptChecked, setFreeTrialPromptChecked] = React.useState(false);
   const [tabBarLayout, setTabBarLayout] = React.useState(null);
   const styles = React.useMemo(() => createStyles(), [themeColors]);
   const isPremiumActive = Boolean(
@@ -378,6 +415,9 @@ const Navigation = () => {
 
   React.useEffect(() => {
     setHideNotificationPromptForSession(false);
+    setHideFreeTrialPromptForSession(false);
+    setFreeTrialLabel('');
+    setFreeTrialPromptChecked(false);
   }, [authUser?.id]);
 
   const handleDismissTutorial = React.useCallback(() => {
@@ -403,6 +443,67 @@ const Navigation = () => {
     await dismissNotificationPermissionPrompt();
   }, [dismissNotificationPermissionPrompt]);
 
+  const handleCloseFreeTrialPrompt = React.useCallback(() => {
+    setHideFreeTrialPromptForSession(true);
+  }, []);
+
+  const handleDontAskAgainFreeTrialPrompt = React.useCallback(async () => {
+    setHideFreeTrialPromptForSession(true);
+    await dismissPremiumTrialPrompt();
+  }, [dismissPremiumTrialPrompt]);
+
+  const shouldCheckFreeTrialPrompt = Boolean(
+    authUser?.id &&
+      profileLoaded &&
+      userSettingsLoaded &&
+      !showAppTutorial &&
+      !isPremiumActive &&
+      !userSettings?.premiumTrialPromptDismissedAt &&
+      !hideFreeTrialPromptForSession &&
+      !hasPremiumHistory(profile)
+  );
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    if (!shouldCheckFreeTrialPrompt) {
+      setFreeTrialLabel('');
+      setFreeTrialPromptChecked(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadFreeTrialPrompt = async () => {
+      setFreeTrialPromptChecked(false);
+      try {
+        const { monthly } = await loadOfferingPackages();
+        const offer = monthly
+          ? await getEligibleFreeTrialOfferForPackage(monthly, authUser?.id)
+          : null;
+        if (cancelled) return;
+        setFreeTrialLabel(offer?.label || '');
+      } catch (error) {
+        if (cancelled) return;
+        console.log('Error loading premium free trial prompt:', error);
+        setFreeTrialLabel('');
+      } finally {
+        if (!cancelled) {
+          setFreeTrialPromptChecked(true);
+        }
+      }
+    };
+
+    loadFreeTrialPrompt();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser?.id, shouldCheckFreeTrialPrompt]);
+
+  const shouldShowFreeTrialPrompt = Boolean(
+    shouldCheckFreeTrialPrompt && freeTrialPromptChecked && freeTrialLabel
+  );
+
   const shouldShowNotificationPrompt = Boolean(
     authUser?.id &&
       profileLoaded &&
@@ -411,7 +512,10 @@ const Navigation = () => {
       !hasNotificationPermission &&
       !userSettings?.notificationPromptDismissedAt &&
       !hideNotificationPromptForSession &&
-      !showAppTutorial
+      !hideFreeTrialPromptForSession &&
+      !showAppTutorial &&
+      (!shouldCheckFreeTrialPrompt || freeTrialPromptChecked) &&
+      !shouldShowFreeTrialPrompt
   );
 
   const navTheme = React.useMemo(
@@ -469,6 +573,10 @@ const Navigation = () => {
                   onDontAskAgainNotificationPrompt={
                     handleDontAskAgainNotificationPrompt
                   }
+                  showFreeTrialPrompt={shouldShowFreeTrialPrompt}
+                  freeTrialLabel={freeTrialLabel || '7-day Free Trial'}
+                  onCloseFreeTrialPrompt={handleCloseFreeTrialPrompt}
+                  onDontAskAgainFreeTrialPrompt={handleDontAskAgainFreeTrialPrompt}
                   tabBarLayout={tabBarLayout}
                   onTabBarLayout={(event) => setTabBarLayout(event?.nativeEvent?.layout || null)}
                   themeColors={themeColors}

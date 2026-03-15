@@ -16,9 +16,15 @@ const androidApiKey = 'goog_pwyWISJSXbUBoSRppNHtySWkYwU';
 
 const ENTITLEMENT_ID = 'premium';
 const DEFAULT_OFFERING_ID = 'default';
-const IOS_DEFAULT_PREMIUM_PRODUCT_IDS = {
-  monthly: 'pillaflow_monthly',
-  annual: 'pillaflow_yearly',
+export const PREMIUM_PRODUCT_IDS_BY_PLATFORM = {
+  ios: {
+    monthly: 'pillaflow_monthly',
+    annual: 'pillaflow_yearly',
+  },
+  android: {
+    monthly: 'pillaflow1month:monthly',
+    annual: 'pillaflow1year:yearly',
+  },
 };
 
 const globalKey = '__PILLAFLOW_REVENUECAT__';
@@ -81,6 +87,11 @@ const findPackageByProductIdentifier = (offering, productIdentifier) => {
   );
 };
 
+const requiresExactDefaultOffering = Platform.OS === 'ios' || Platform.OS === 'android';
+
+const getRequiredProductIdentifier = (type) =>
+  PREMIUM_PRODUCT_IDS_BY_PLATFORM[Platform.OS]?.[type] || '';
+
 export const setRevenueCatUserId = async (userId) => {
   const ok = await configureRevenueCat();
   if (!ok) return false;
@@ -123,8 +134,8 @@ export const setRevenueCatUserId = async (userId) => {
 const matchPackage = (currentOffering, type) => {
   if (!currentOffering) return null;
 
-  if (Platform.OS === 'ios') {
-    const requiredProductIdentifier = IOS_DEFAULT_PREMIUM_PRODUCT_IDS[type] || '';
+  const requiredProductIdentifier = getRequiredProductIdentifier(type);
+  if (requiredProductIdentifier) {
     return findPackageByProductIdentifier(currentOffering, requiredProductIdentifier);
   }
 
@@ -155,12 +166,107 @@ const matchPackage = (currentOffering, type) => {
   return null;
 };
 
+const normalizePositiveInteger = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.round(parsed);
+};
+
+const buildFreeTrialLabel = (unit, value, cycles = 1) => {
+  const normalizedUnit = String(unit || '').trim().toUpperCase();
+  const totalUnits =
+    Math.max(1, normalizePositiveInteger(value) || 1) *
+    Math.max(1, normalizePositiveInteger(cycles) || 1);
+
+  if (normalizedUnit === 'WEEK') {
+    return `${totalUnits * 7}-day Free Trial`;
+  }
+
+  if (normalizedUnit === 'DAY') {
+    return `${totalUnits}-day Free Trial`;
+  }
+
+  if (normalizedUnit === 'MONTH') {
+    return `${totalUnits}-month Free Trial`;
+  }
+
+  if (normalizedUnit === 'YEAR') {
+    return `${totalUnits}-year Free Trial`;
+  }
+
+  return 'Free Trial';
+};
+
+const getIosFreeTrialOffer = (pkg) => {
+  const introPrice = pkg?.product?.introPrice;
+  if (!introPrice) return null;
+
+  const price = Number(introPrice.price);
+  if (!Number.isFinite(price) || price > 0) return null;
+
+  return {
+    label: buildFreeTrialLabel(
+      introPrice.periodUnit,
+      introPrice.periodNumberOfUnits,
+      introPrice.cycles
+    ),
+    subscriptionOption: null,
+  };
+};
+
+const getAndroidFreeTrialOffer = (pkg) => {
+  const seenOptionIds = new Set();
+  const candidateOptions = [
+    pkg?.product?.defaultOption,
+    ...(Array.isArray(pkg?.product?.subscriptionOptions) ? pkg.product.subscriptionOptions : []),
+  ].filter((option) => {
+    const optionId = String(option?.id || '').trim();
+    if (!optionId) return false;
+    if (seenOptionIds.has(optionId)) return false;
+    seenOptionIds.add(optionId);
+    return true;
+  });
+
+  for (const option of candidateOptions) {
+    const freePhase = option?.freePhase;
+    const amountMicros = Number(freePhase?.price?.amountMicros);
+    if (!freePhase) continue;
+    if (Number.isFinite(amountMicros) && amountMicros > 0) continue;
+
+    return {
+      label: buildFreeTrialLabel(
+        freePhase?.billingPeriod?.unit,
+        freePhase?.billingPeriod?.value,
+        freePhase?.billingCycleCount
+      ),
+      subscriptionOption: option,
+    };
+  }
+
+  return null;
+};
+
+const getPackageFreeTrialOffer = (pkg) => {
+  if (!pkg?.product) return null;
+  if (Platform.OS === 'ios') return getIosFreeTrialOffer(pkg);
+  if (Platform.OS === 'android') return getAndroidFreeTrialOffer(pkg);
+  return null;
+};
+
+const hasSubscriptionHistory = (info) => {
+  const subscriptionsByProductIdentifier = info?.subscriptionsByProductIdentifier;
+  return !!(
+    subscriptionsByProductIdentifier &&
+    Object.keys(subscriptionsByProductIdentifier).length
+  );
+};
+
 const pickDefaultOffering = (offerings) => {
   if (!offerings) return null;
   if (offerings.all && offerings.all[DEFAULT_OFFERING_ID]) {
     return offerings.all[DEFAULT_OFFERING_ID];
   }
-  if (Platform.OS === 'ios') return null;
+  if (requiresExactDefaultOffering) return null;
   if (offerings.current) return offerings.current;
   const allList = offerings.all ? Object.values(offerings.all) : [];
   return allList.find(Boolean) || null;
@@ -180,9 +286,59 @@ export const loadOfferingPackages = async () => {
   };
 };
 
-export const purchaseRevenueCatPackage = async (pkg) => {
+export const getEligibleFreeTrialOfferForPackage = async (pkg, appUserId) => {
+  const ok =
+    appUserId === undefined ? await configureRevenueCat() : await setRevenueCatUserId(appUserId);
+  if (!ok || !pkg) return null;
+
+  const freeTrialOffer = getPackageFreeTrialOffer(pkg);
+  if (!freeTrialOffer) return null;
+
+  let customerInfo = null;
+  try {
+    customerInfo = await Purchases.getCustomerInfo();
+  } catch (error) {
+    if (Platform.OS === 'android') {
+      console.warn('RevenueCat customer info failed while checking free trial', error);
+      return null;
+    }
+  }
+
+  if (hasSubscriptionHistory(customerInfo)) return null;
+
+  if (Platform.OS === 'ios') {
+    try {
+      const productIdentifier = getPackageProductIdentifier(pkg);
+      if (!productIdentifier) return null;
+
+      const eligibilityByProduct =
+        await Purchases.checkTrialOrIntroductoryPriceEligibility([productIdentifier]);
+      const eligibleStatus =
+        Purchases.INTRO_ELIGIBILITY_STATUS?.INTRO_ELIGIBILITY_STATUS_ELIGIBLE ?? 2;
+
+      if (eligibilityByProduct?.[productIdentifier]?.status !== eligibleStatus) {
+        return null;
+      }
+    } catch (error) {
+      console.warn('RevenueCat intro eligibility check failed', error);
+      return null;
+    }
+  }
+
+  return {
+    ...freeTrialOffer,
+    productIdentifier: getPackageProductIdentifier(pkg) || null,
+  };
+};
+
+export const purchaseRevenueCatPackage = async (pkg, options = {}) => {
   const ok = await configureRevenueCat();
   if (!ok) throw new Error('RevenueCat not configured');
+
+  if (Platform.OS === 'android' && options?.subscriptionOption) {
+    return Purchases.purchaseSubscriptionOption(options.subscriptionOption);
+  }
+
   return Purchases.purchasePackage(pkg);
 };
 
@@ -227,6 +383,7 @@ export const getPremiumEntitlementStatus = async (appUserId) => {
 export default {
   configureRevenueCat,
   loadOfferingPackages,
+  getEligibleFreeTrialOfferForPackage,
   purchaseRevenueCatPackage,
   restoreRevenueCatPurchases,
   getPremiumEntitlementStatus,

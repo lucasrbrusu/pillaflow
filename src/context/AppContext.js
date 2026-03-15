@@ -94,6 +94,7 @@ const STORAGE_KEYS = {
   CALENDAR_SYNC_PREFIX: '@pillaflow_calendar_sync_',
   PUSH_DEVICE_ID: '@pillaflow_push_device_id',
   NOTIFICATION_PROMPT_DISMISSED_PREFIX: '@pillaflow_notification_prompt_dismissed_',
+  PREMIUM_TRIAL_PROMPT_DISMISSED_PREFIX: '@pillaflow_premium_trial_prompt_dismissed_',
 };
 
 const SUPABASE_STORAGE_KEYS = [
@@ -276,6 +277,7 @@ const defaultUserSettings = {
   allowHabitInvites: true,
   allowRoutineInvites: true,
   notificationPromptDismissedAt: null,
+  premiumTrialPromptDismissedAt: null,
 };
 
 const createDefaultMfaFactors = () => ({
@@ -438,6 +440,8 @@ const getCalendarSyncKey = (userId) =>
   `${STORAGE_KEYS.CALENDAR_SYNC_PREFIX}${userId || 'anon'}`;
 const getNotificationPromptDismissedKey = (userId) =>
   `${STORAGE_KEYS.NOTIFICATION_PROMPT_DISMISSED_PREFIX}${userId || 'anon'}`;
+const getPremiumTrialPromptDismissedKey = (userId) =>
+  `${STORAGE_KEYS.PREMIUM_TRIAL_PROMPT_DISMISSED_PREFIX}${userId || 'anon'}`;
 
 const createDefaultCalendarSyncState = () => ({
   taskToEvent: {},
@@ -688,6 +692,44 @@ const writeNotificationPromptDismissedAt = async (userId, dismissedAt = null) =>
 
   await AsyncStorage.setItem(
     getNotificationPromptDismissedKey(userId),
+    JSON.stringify({
+      dismissedAt: normalized,
+      updatedAt: new Date().toISOString(),
+    })
+  );
+};
+
+const readPremiumTrialPromptDismissedAt = async (userId) => {
+  if (!userId) return null;
+  const value = await AsyncStorage.getItem(getPremiumTrialPromptDismissedKey(userId));
+  if (!value) return null;
+  const toDismissedAt = (candidate) => {
+    if (candidate === undefined || candidate === null) return null;
+    const text = String(candidate).trim();
+    return text.length ? text : null;
+  };
+
+  try {
+    const parsed = JSON.parse(value);
+    const candidate =
+      parsed?.dismissedAt ?? parsed?.premiumTrialPromptDismissedAt ?? parsed ?? null;
+    return toDismissedAt(candidate);
+  } catch (error) {
+    return toDismissedAt(value);
+  }
+};
+
+const writePremiumTrialPromptDismissedAt = async (userId, dismissedAt = null) => {
+  if (!userId) return;
+  const normalized =
+    dismissedAt === undefined || dismissedAt === null ? null : String(dismissedAt).trim() || null;
+  if (!normalized) {
+    await AsyncStorage.removeItem(getPremiumTrialPromptDismissedKey(userId));
+    return;
+  }
+
+  await AsyncStorage.setItem(
+    getPremiumTrialPromptDismissedKey(userId),
     JSON.stringify({
       dismissedAt: normalized,
       updatedAt: new Date().toISOString(),
@@ -13635,12 +13677,24 @@ const mapProfileRow = (row) => {
           userSettings?.notificationPromptDismissedAt,
         defaultUserSettings.notificationPromptDismissedAt
       ),
+    premiumTrialPromptDismissedAt:
+      normalizeOptionalText(
+        row?.premium_trial_prompt_dismissed_at ?? row?.premiumTrialPromptDismissedAt,
+        null
+      ) ??
+      normalizeOptionalText(
+        fallbackValues?.premiumTrialPromptDismissedAt ??
+          userSettings?.premiumTrialPromptDismissedAt,
+        defaultUserSettings.premiumTrialPromptDismissedAt
+      ),
   });
 
   const fetchUserSettings = async (userId) => {
     if (!userId) return null;
     const localNotificationPromptDismissedAt =
       await readNotificationPromptDismissedAt(userId);
+    const localPremiumTrialPromptDismissedAt =
+      await readPremiumTrialPromptDismissedAt(userId);
     const requiredSelectFields = [
       'id',
       'user_id',
@@ -13656,6 +13710,7 @@ const mapProfileRow = (row) => {
       'habit_completion_method',
       'calendar_sync_enabled',
       'notification_prompt_dismissed_at',
+      'premium_trial_prompt_dismissed_at',
       INVITE_PERMISSION_FIELDS.task.column,
       INVITE_PERMISSION_FIELDS.group.column,
       INVITE_PERMISSION_FIELDS.habit.column,
@@ -13713,6 +13768,8 @@ const mapProfileRow = (row) => {
         ...prev,
         notificationPromptDismissedAt:
           localNotificationPromptDismissedAt ?? prev.notificationPromptDismissedAt ?? null,
+        premiumTrialPromptDismissedAt:
+          localPremiumTrialPromptDismissedAt ?? prev.premiumTrialPromptDismissedAt ?? null,
       }));
       setUserSettingsLoaded(true);
       return null;
@@ -13723,6 +13780,7 @@ const mapProfileRow = (row) => {
         {
           ...defaultUserSettings,
           notificationPromptDismissedAt: localNotificationPromptDismissedAt,
+          premiumTrialPromptDismissedAt: localPremiumTrialPromptDismissedAt,
         },
         userId
       );
@@ -13734,11 +13792,16 @@ const mapProfileRow = (row) => {
         userSettings?.habitCompletionMethod ?? defaultUserSettings.habitCompletionMethod,
         {
           notificationPromptDismissedAt: localNotificationPromptDismissedAt,
+          premiumTrialPromptDismissedAt: localPremiumTrialPromptDismissedAt,
         }
       );
       setUserSettings(mapped);
       setUserSettingsLoaded(true);
       await writeNotificationPromptDismissedAt(userId, mapped.notificationPromptDismissedAt);
+      await writePremiumTrialPromptDismissedAt(
+        userId,
+        mapped.premiumTrialPromptDismissedAt
+      );
       const themeToApply = mapped.themeName || 'default';
       setThemeName(themeToApply);
       applyTheme(themeToApply);
@@ -13748,6 +13811,8 @@ const mapProfileRow = (row) => {
         ...prev,
         notificationPromptDismissedAt:
           localNotificationPromptDismissedAt ?? prev.notificationPromptDismissedAt ?? null,
+        premiumTrialPromptDismissedAt:
+          localPremiumTrialPromptDismissedAt ?? prev.premiumTrialPromptDismissedAt ?? null,
       }));
       setUserSettingsLoaded(true);
     }
@@ -13801,6 +13866,10 @@ const mapProfileRow = (row) => {
         overrides.notificationPromptDismissedAt ??
         userSettings.notificationPromptDismissedAt ??
         defaultUserSettings.notificationPromptDismissedAt,
+      premium_trial_prompt_dismissed_at:
+        overrides.premiumTrialPromptDismissedAt ??
+        userSettings.premiumTrialPromptDismissedAt ??
+        defaultUserSettings.premiumTrialPromptDismissedAt,
       language: 'en',
       updated_at: nowISO,
     };
@@ -13848,6 +13917,11 @@ const mapProfileRow = (row) => {
           overrides.notificationPromptDismissedAt ??
           userSettings.notificationPromptDismissedAt ??
           defaultUserSettings.notificationPromptDismissedAt,
+        premiumTrialPromptDismissedAt:
+          mutablePayload.premium_trial_prompt_dismissed_at ??
+          overrides.premiumTrialPromptDismissedAt ??
+          userSettings.premiumTrialPromptDismissedAt ??
+          defaultUserSettings.premiumTrialPromptDismissedAt,
       }
     );
     setUserSettings(mapped);
@@ -13866,6 +13940,15 @@ const mapProfileRow = (row) => {
       await writeNotificationPromptDismissedAt(
         authUser.id,
         updates.notificationPromptDismissedAt
+      );
+    }
+    if (
+      authUser?.id &&
+      Object.prototype.hasOwnProperty.call(updates || {}, 'premiumTrialPromptDismissedAt')
+    ) {
+      await writePremiumTrialPromptDismissedAt(
+        authUser.id,
+        updates.premiumTrialPromptDismissedAt
       );
     }
     return upsertUserSettings(merged);
@@ -14661,6 +14744,15 @@ const mapProfileRow = (row) => {
 
     await writeNotificationPromptDismissedAt(authUser.id, dismissedAt);
     await updateUserSettings({ notificationPromptDismissedAt: dismissedAt });
+    return dismissedAt;
+  }, [authUser?.id, updateUserSettings]);
+
+  const dismissPremiumTrialPrompt = useCallback(async () => {
+    if (!authUser?.id) return null;
+    const dismissedAt = new Date().toISOString();
+
+    await writePremiumTrialPromptDismissedAt(authUser.id, dismissedAt);
+    await updateUserSettings({ premiumTrialPromptDismissedAt: dismissedAt });
     return dismissedAt;
   }, [authUser?.id, updateUserSettings]);
 
@@ -15879,6 +15971,7 @@ const mapProfileRow = (row) => {
     refreshNotificationPermissionStatus,
     requestNotificationPermission,
     dismissNotificationPermissionPrompt,
+    dismissPremiumTrialPrompt,
     setCalendarSyncEnabled,
     requestCalendarPermission,
     t,
