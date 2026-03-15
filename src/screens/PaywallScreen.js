@@ -18,7 +18,6 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Text as SvgText }
 import { borderRadius, spacing, typography, shadows } from '../utils/theme';
 import { useApp } from '../context/AppContext';
 import {
-  configureRevenueCat,
   loadOfferingPackages,
   getEligibleFreeTrialOfferForPackage,
   purchaseRevenueCatPackage,
@@ -135,7 +134,6 @@ const PaywallScreen = () => {
       setAnnualPackage(null);
       setMonthlyTrialOffer(null);
       try {
-        await configureRevenueCat();
         const { offering, monthly, annual } = await loadOfferingPackages(authUser?.id);
         const eligibleMonthlyTrial = monthly
           ? await getEligibleFreeTrialOfferForPackage(monthly, authUser?.id)

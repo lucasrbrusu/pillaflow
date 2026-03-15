@@ -1788,6 +1788,7 @@ const achievementSyncInFlightRef = useRef(false);
     entitlementId: null,
     appUserId: null,
   });
+  const [isRevenueCatSyncing, setIsRevenueCatSyncing] = useState(false);
 
   // Auth State
   const [authUser, setAuthUser] = useState(null);
@@ -1993,6 +1994,9 @@ const achievementSyncInFlightRef = useRef(false);
       const activeUserId = authUser?.id ? String(authUser.id) : null;
       try {
         if (!activeUserId) {
+          if (!shouldAbort?.()) {
+            setIsRevenueCatSyncing(false);
+          }
           await setRevenueCatUserId(null);
           if (!shouldAbort?.()) {
             setRevenueCatPremium({
@@ -2005,20 +2009,12 @@ const achievementSyncInFlightRef = useRef(false);
           return { entitlement: null, isActive: false, expiration: null, appUserId: null };
         }
 
-        const configured = await setRevenueCatUserId(activeUserId);
-        if (!configured) {
-          if (!shouldAbort?.()) {
-            setRevenueCatPremium({
-              isActive: false,
-              expiration: null,
-              entitlementId: null,
-              appUserId: activeUserId,
-            });
-          }
-          return { entitlement: null, isActive: false, expiration: null, appUserId: activeUserId };
+        if (!shouldAbort?.()) {
+          setIsRevenueCatSyncing(true);
         }
 
-        const { entitlement, isActive, expiration } = await getPremiumEntitlementStatus();
+        const { entitlement, isActive, expiration } =
+          await getPremiumEntitlementStatus(activeUserId);
         if (shouldAbort?.()) return null;
 
         const normalizedExpiration = normalizeRevenueCatExpiration(entitlement, expiration);
@@ -2052,7 +2048,19 @@ const achievementSyncInFlightRef = useRef(false);
         };
       } catch (error) {
         console.log('Error syncing RevenueCat entitlement:', error);
+        if (!shouldAbort?.()) {
+          setRevenueCatPremium({
+            isActive: false,
+            expiration: null,
+            entitlementId: null,
+            appUserId: activeUserId,
+          });
+        }
         return null;
+      } finally {
+        if (!shouldAbort?.()) {
+          setIsRevenueCatSyncing(false);
+        }
       }
     },
     [authUser?.id, setProfile, setRevenueCatPremium]
@@ -2140,7 +2148,6 @@ const achievementSyncInFlightRef = useRef(false);
     await Promise.all([
       fetchProfileFromSupabase(userId),
       fetchUserSettings(userId),
-      refreshHealthTransferData(userId),
     ]);
   } catch (error) {
     console.error('Error loading user data from Supabase:', error);
@@ -2199,6 +2206,7 @@ const achievementSyncInFlightRef = useRef(false);
         entitlementId: null,
         appUserId: null,
       });
+      setIsRevenueCatSyncing(false);
       setHasOnboarded(false);
       setThemeName('default');
       applyTheme('default');
@@ -15960,6 +15968,7 @@ const mapProfileRow = (row) => {
     refreshAchievementUnlocks,
     syncEarnedAchievements,
     revenueCatPremium,
+    isRevenueCatSyncing,
     refreshRevenueCatPremium,
     updateProfile,
     updateProfileBadgeSlots,

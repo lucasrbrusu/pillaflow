@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -86,14 +85,7 @@ const PremiumTrialOverlay = ({
   };
 
   return (
-    <Modal
-      visible
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
-      hardwareAccelerated
-    >
+    <View style={styles.overlayRoot}>
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
 
@@ -185,11 +177,16 @@ const PremiumTrialOverlay = ({
           </Text>
         </LinearGradient>
       </View>
-    </Modal>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
+  overlayRoot: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 40,
+    elevation: 40,
+  },
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(18, 23, 38, 0.48)',

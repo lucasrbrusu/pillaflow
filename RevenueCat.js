@@ -30,7 +30,16 @@ export const PREMIUM_PRODUCT_IDS_BY_PLATFORM = {
 const globalKey = '__PILLAFLOW_REVENUECAT__';
 const globalState = (() => {
   if (!globalThis[globalKey]) {
-    globalThis[globalKey] = { configured: false, configurePromise: null, appUserId: null };
+    globalThis[globalKey] = {
+      configured: false,
+      configurePromise: null,
+      appUserId: null,
+      userChangePromise: null,
+      offeringsCache: null,
+      offeringsPromise: null,
+      customerInfoCache: null,
+      customerInfoPromise: null,
+    };
   }
   return globalThis[globalKey];
 })();
@@ -38,6 +47,28 @@ const globalState = (() => {
 let configured = globalState.configured || false;
 let configurePromise = globalState.configurePromise || null;
 let currentAppUserId = globalState.appUserId || null;
+const REVENUECAT_CACHE_TTL_MS = 30 * 1000;
+
+const invalidateRevenueCatCaches = () => {
+  globalState.offeringsCache = null;
+  globalState.offeringsPromise = null;
+  globalState.customerInfoCache = null;
+  globalState.customerInfoPromise = null;
+};
+
+const readFreshCacheValue = (entry) => {
+  if (!entry?.value) return null;
+  if (!entry?.cachedAt) return null;
+  if (Date.now() - entry.cachedAt > REVENUECAT_CACHE_TTL_MS) return null;
+  return entry.value;
+};
+
+const enqueueRevenueCatUserChange = async (operation) => {
+  const previous = globalState.userChangePromise || Promise.resolve();
+  const next = previous.then(operation, operation);
+  globalState.userChangePromise = next.catch(() => {});
+  return next;
+};
 
 export const configureRevenueCat = async () => {
   if (configured) return true;
@@ -93,12 +124,28 @@ const getRequiredProductIdentifier = (type) =>
   PREMIUM_PRODUCT_IDS_BY_PLATFORM[Platform.OS]?.[type] || '';
 
 export const setRevenueCatUserId = async (userId) => {
-  const ok = await configureRevenueCat();
-  if (!ok) return false;
+  return enqueueRevenueCatUserChange(async () => {
+    const ok = await configureRevenueCat();
+    if (!ok) return false;
 
-  const nextUserId = normalizeAppUserId(userId);
-  if (!nextUserId) {
-    if (currentAppUserId) {
+    const nextUserId = normalizeAppUserId(userId);
+    if (!nextUserId) {
+      if (currentAppUserId) {
+        try {
+          await Purchases.logOut();
+        } catch (error) {
+          console.warn('RevenueCat logOut failed', error);
+        }
+        currentAppUserId = null;
+        globalState.appUserId = null;
+        invalidateRevenueCatCaches();
+      }
+      return true;
+    }
+
+    if (currentAppUserId === nextUserId) return true;
+
+    if (currentAppUserId && currentAppUserId !== nextUserId) {
       try {
         await Purchases.logOut();
       } catch (error) {
@@ -106,28 +153,69 @@ export const setRevenueCatUserId = async (userId) => {
       }
       currentAppUserId = null;
       globalState.appUserId = null;
+      invalidateRevenueCatCaches();
     }
-    return true;
-  }
 
-  if (currentAppUserId && currentAppUserId !== nextUserId) {
     try {
-      await Purchases.logOut();
+      await Purchases.logIn(nextUserId);
+      currentAppUserId = nextUserId;
+      globalState.appUserId = nextUserId;
+      invalidateRevenueCatCaches();
+      return true;
     } catch (error) {
-      console.warn('RevenueCat logOut failed', error);
+      console.warn('RevenueCat logIn failed', error);
+      return false;
     }
+  });
+};
+
+const getOfferingsForCurrentUser = async ({ forceRefresh = false } = {}) => {
+  if (!forceRefresh) {
+    const cachedOfferings = readFreshCacheValue(globalState.offeringsCache);
+    if (cachedOfferings) return cachedOfferings;
+    if (globalState.offeringsPromise) return globalState.offeringsPromise;
   }
 
-  if (currentAppUserId === nextUserId) return true;
+  const promise = Purchases.getOfferings();
+  globalState.offeringsPromise = promise;
 
   try {
-    await Purchases.logIn(nextUserId);
-    currentAppUserId = nextUserId;
-    globalState.appUserId = nextUserId;
-    return true;
-  } catch (error) {
-    console.warn('RevenueCat logIn failed', error);
-    return false;
+    const offerings = await promise;
+    globalState.offeringsCache = {
+      value: offerings,
+      cachedAt: Date.now(),
+      appUserId: currentAppUserId || null,
+    };
+    return offerings;
+  } finally {
+    if (globalState.offeringsPromise === promise) {
+      globalState.offeringsPromise = null;
+    }
+  }
+};
+
+const getCustomerInfoForCurrentUser = async ({ forceRefresh = false } = {}) => {
+  if (!forceRefresh) {
+    const cachedCustomerInfo = readFreshCacheValue(globalState.customerInfoCache);
+    if (cachedCustomerInfo) return cachedCustomerInfo;
+    if (globalState.customerInfoPromise) return globalState.customerInfoPromise;
+  }
+
+  const promise = Purchases.getCustomerInfo();
+  globalState.customerInfoPromise = promise;
+
+  try {
+    const customerInfo = await promise;
+    globalState.customerInfoCache = {
+      value: customerInfo,
+      cachedAt: Date.now(),
+      appUserId: currentAppUserId || null,
+    };
+    return customerInfo;
+  } finally {
+    if (globalState.customerInfoPromise === promise) {
+      globalState.customerInfoPromise = null;
+    }
   }
 };
 
@@ -291,13 +379,13 @@ const pickDefaultOffering = (offerings) => {
   return allList.find(Boolean) || null;
 };
 
-export const loadOfferingPackages = async (appUserId) => {
+export const loadOfferingPackages = async (appUserId, options = {}) => {
   const ok =
     appUserId === undefined ? await configureRevenueCat() : await setRevenueCatUserId(appUserId);
   if (!ok) {
     return { offering: null, monthly: null, annual: null };
   }
-  const offerings = await Purchases.getOfferings();
+  const offerings = await getOfferingsForCurrentUser(options);
   const selected = pickDefaultOffering(offerings);
   return {
     offering: selected,
@@ -306,7 +394,7 @@ export const loadOfferingPackages = async (appUserId) => {
   };
 };
 
-export const getEligibleFreeTrialOfferForPackage = async (pkg, appUserId) => {
+export const getEligibleFreeTrialOfferForPackage = async (pkg, appUserId, options = {}) => {
   const ok =
     appUserId === undefined ? await configureRevenueCat() : await setRevenueCatUserId(appUserId);
   if (!ok || !pkg) return null;
@@ -316,7 +404,7 @@ export const getEligibleFreeTrialOfferForPackage = async (pkg, appUserId) => {
 
   let customerInfo = null;
   try {
-    customerInfo = await Purchases.getCustomerInfo();
+    customerInfo = await getCustomerInfoForCurrentUser(options);
   } catch (error) {
     if (Platform.OS === 'android') {
       console.warn('RevenueCat customer info failed while checking free trial', error);
@@ -370,24 +458,30 @@ export const purchaseRevenueCatPackage = async (pkg, options = {}) => {
   const ok = await configureRevenueCat();
   if (!ok) throw new Error('RevenueCat not configured');
 
+  let result = null;
   if (Platform.OS === 'android' && options?.subscriptionOption) {
-    return Purchases.purchaseSubscriptionOption(options.subscriptionOption);
+    result = await Purchases.purchaseSubscriptionOption(options.subscriptionOption);
+  } else {
+    result = await Purchases.purchasePackage(pkg);
   }
 
-  return Purchases.purchasePackage(pkg);
+  invalidateRevenueCatCaches();
+  return result;
 };
 
 export const restoreRevenueCatPurchases = async () => {
   const ok = await configureRevenueCat();
   if (!ok) throw new Error('RevenueCat not configured');
-  return Purchases.restorePurchases();
+  const result = await Purchases.restorePurchases();
+  invalidateRevenueCatCaches();
+  return result;
 };
 
-export const getPremiumEntitlementStatus = async (appUserId) => {
+export const getPremiumEntitlementStatus = async (appUserId, options = {}) => {
   const ok =
     appUserId === undefined ? await configureRevenueCat() : await setRevenueCatUserId(appUserId);
   if (!ok) return { entitlement: null, isActive: false, info: null, expiration: null };
-  const info = await Purchases.getCustomerInfo();
+  const info = await getCustomerInfoForCurrentUser(options);
   const activeEntitlements = info?.entitlements?.active || {};
 
   const direct = activeEntitlements[ENTITLEMENT_ID];

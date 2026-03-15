@@ -1,5 +1,13 @@
 import React from 'react';
-import { View, StyleSheet, TouchableOpacity, ActivityIndicator, Dimensions, Animated } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  TouchableOpacity,
+  ActivityIndicator,
+  Dimensions,
+  Animated,
+  InteractionManager,
+} from 'react-native';
 import { NavigationContainer, DefaultTheme, useNavigation, useIsFocused } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -84,6 +92,7 @@ const TAB_FADE_START_OPACITY = 0.96;
 const TAB_BAR_CONTAINER_PADDING_HORIZONTAL = 20;
 const TAB_BAR_PADDING_HORIZONTAL = 16;
 const TAB_ICON_CENTER_OFFSET_FROM_BOTTOM = 34;
+const PREMIUM_PROMPT_DELAY_MS = 1200;
 
 const QuickTabFade = ({ children }) => {
   const isFocused = useIsFocused();
@@ -375,12 +384,15 @@ const Navigation = () => {
     requestNotificationPermission,
     dismissNotificationPermissionPrompt,
     dismissPremiumTrialPrompt,
+    revenueCatPremium,
+    isRevenueCatSyncing,
   } = useApp();
   const [showAppTutorial, setShowAppTutorial] = React.useState(false);
   const [hideNotificationPromptForSession, setHideNotificationPromptForSession] =
     React.useState(false);
   const [hideFreeTrialPromptForSession, setHideFreeTrialPromptForSession] =
     React.useState(false);
+  const [premiumPromptArmed, setPremiumPromptArmed] = React.useState(false);
   const [freeTrialLabel, setFreeTrialLabel] = React.useState('');
   const [freeTrialPromptChecked, setFreeTrialPromptChecked] = React.useState(false);
   const [tabBarLayout, setTabBarLayout] = React.useState(null);
@@ -406,8 +418,34 @@ const Navigation = () => {
   React.useEffect(() => {
     setHideNotificationPromptForSession(false);
     setHideFreeTrialPromptForSession(false);
+    setPremiumPromptArmed(false);
     setFreeTrialLabel('');
     setFreeTrialPromptChecked(false);
+  }, [authUser?.id]);
+
+  React.useEffect(() => {
+    if (!authUser?.id) {
+      setPremiumPromptArmed(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let timeoutId = null;
+    const interactionHandle = InteractionManager.runAfterInteractions(() => {
+      timeoutId = setTimeout(() => {
+        if (!cancelled) {
+          setPremiumPromptArmed(true);
+        }
+      }, PREMIUM_PROMPT_DELAY_MS);
+    });
+
+    return () => {
+      cancelled = true;
+      interactionHandle?.cancel?.();
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
   }, [authUser?.id]);
 
   const handleDismissTutorial = React.useCallback(() => {
@@ -442,7 +480,7 @@ const Navigation = () => {
     await dismissPremiumTrialPrompt();
   }, [dismissPremiumTrialPrompt]);
 
-  const shouldCheckPremiumPrompt = Boolean(
+  const premiumPromptBaseEligible = Boolean(
     authUser?.id &&
       profileLoaded &&
       userSettingsLoaded &&
@@ -450,6 +488,23 @@ const Navigation = () => {
       !isPremiumActive &&
       !userSettings?.premiumTrialPromptDismissedAt &&
       !hideFreeTrialPromptForSession
+  );
+
+  const revenueCatResolvedForUser = Boolean(
+    !authUser?.id ||
+      (!isRevenueCatSyncing &&
+        revenueCatPremium?.appUserId === String(authUser.id))
+  );
+
+  const shouldDelayPremiumPrompt = Boolean(
+    premiumPromptBaseEligible &&
+      (!premiumPromptArmed || !revenueCatResolvedForUser)
+  );
+
+  const shouldCheckPremiumPrompt = Boolean(
+    premiumPromptBaseEligible &&
+      premiumPromptArmed &&
+      revenueCatResolvedForUser
   );
 
   const shouldCheckFreeTrialPrompt = shouldCheckPremiumPrompt;
@@ -511,6 +566,7 @@ const Navigation = () => {
       !hideNotificationPromptForSession &&
       !hideFreeTrialPromptForSession &&
       !showAppTutorial &&
+      !shouldDelayPremiumPrompt &&
       (!shouldCheckPremiumPrompt || freeTrialPromptChecked) &&
       !shouldShowFreeTrialPrompt &&
       !shouldShowPremiumUnlockPrompt
