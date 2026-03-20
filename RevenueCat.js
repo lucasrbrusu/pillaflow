@@ -11,7 +11,7 @@ if (typeof globalThis.location === 'undefined') {
 }
 
 // Production RevenueCat API keys (iOS and Android)
-const iosApiKey = 'appl_VnKzbJTYiUgHyeQtpuoHZgyrAjj';
+const iosApiKey = 'appl_laPCbzyyDJjAqPekLjpDVWegNQU';
 const androidApiKey = 'goog_pwyWISJSXbUBoSRppNHtySWkYwU';
 
 const ENTITLEMENT_ID = 'premium';
