@@ -33,7 +33,14 @@ const legalLinks = [
 const PrivacySecurityScreen = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { themeColors, t, mfaFactors, isMfaLoading } = useApp();
+  const {
+    themeColors,
+    t,
+    mfaFactors,
+    isMfaLoading,
+    profile,
+    isEmailVerified,
+  } = useApp();
   const styles = useMemo(() => createStyles(themeColors), [themeColors]);
   const verifiedMfaCount = mfaFactors?.verified?.length || 0;
 
@@ -59,6 +66,24 @@ const PrivacySecurityScreen = () => {
           <Text style={styles.headerTitle}>{t('Privacy & Security')}</Text>
           <View style={styles.headerSpacer} />
         </View>
+
+        <Card style={styles.card}>
+          <Text style={styles.sectionTitle}>{t('Email Verification')}</Text>
+          <Text style={styles.sectionSubtitle}>
+            {isEmailVerified
+              ? t('Your email address is verified.')
+              : t('Verify your email address to fully secure your account.')}
+          </Text>
+          <Text style={styles.emailValue}>{profile?.email || t('No email address available')}</Text>
+          <Button
+            title={isEmailVerified ? t('View Verification Status') : t('Verify Email')}
+            icon="mail-outline"
+            variant="outline"
+            onPress={() => navigation.navigate('VerifyEmail')}
+            style={styles.linkButton}
+            fullWidth
+          />
+        </Card>
 
         <Card style={styles.card}>
           <Text style={styles.sectionTitle}>{t('Security')}</Text>
@@ -143,6 +168,11 @@ const createStyles = (themeColors) =>
       ...typography.bodySmall,
       color: colors.textSecondary,
       marginBottom: spacing.lg,
+    },
+    emailValue: {
+      ...typography.body,
+      color: themeColors?.text || colors.text,
+      marginBottom: spacing.md,
     },
     linkButton: {
       marginBottom: spacing.sm,

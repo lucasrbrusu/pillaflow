@@ -46,6 +46,7 @@ import CalendarScreen from '../screens/CalendarScreen';
 import OnboardingScreen from '../screens/OnboardingScreen';
 import AuthScreen from '../screens/AuthScreen';
 import SignupFlowScreen from '../screens/SignupFlowScreen';
+import VerifyEmailScreen from '../screens/VerifyEmailScreen';
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 import AppearanceScreen from '../screens/AppearanceScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
@@ -654,6 +655,7 @@ const Navigation = () => {
               component={SpendingInsightsScreen}
             />
             <Stack.Screen name="PrivacySecurity" component={PrivacySecurityScreen} />
+            <Stack.Screen name="VerifyEmail" component={VerifyEmailScreen} />
             <Stack.Screen name="TwoFactorAuth" component={TwoFactorAuthScreen} />
             <Stack.Screen name="HelpSupport" component={HelpSupportScreen} />
             <Stack.Screen name="Membership" component={MembershipScreen} />

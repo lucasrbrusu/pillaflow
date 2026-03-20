@@ -132,6 +132,8 @@ const defaultProfile = {
   hasCompletedHabitsTutorial: null,
   habitsTutorialCompletedAt: null,
   badgeSlots: [null, null, null],
+  emailVerified: false,
+  emailVerifiedAt: null,
 };
 
 const defaultHealthDay = () => ({
@@ -1752,6 +1754,10 @@ const profileBadgeColumnSupportRef = useRef({
 });
 const profileGoalColumnSupportRef = useRef({
   daily_steps_goal: true,
+});
+const profileEmailVerificationColumnSupportRef = useRef({
+  email_verified: true,
+  email_verified_at: true,
 });
 const profileAchievementUnlockColumnSupportRef = useRef({
   achievement_unlocks: true,
@@ -13067,6 +13073,18 @@ const mapProfileRow = (row) => {
     habitsTutorialCompletedAt,
     habits_tutorial_completed_at: habitsTutorialCompletedAt,
     badgeSlots,
+    emailVerified:
+      row?.email_verified ??
+      row?.emailVerified ??
+      defaultProfile.emailVerified,
+    emailVerifiedAt:
+      row?.email_verified_at ??
+      row?.emailVerifiedAt ??
+      defaultProfile.emailVerifiedAt,
+    email_verified_at:
+      row?.email_verified_at ??
+      row?.emailVerifiedAt ??
+      defaultProfile.emailVerifiedAt,
   };
 };
 
@@ -13085,8 +13103,14 @@ const mapProfileRow = (row) => {
         prev?.email && prev.email !== defaultProfile.email
           ? prev.email
           : authUser.email || defaultProfile.email;
-      if (nextName === prev.name && nextEmail === prev.email) return prev;
-      return { ...prev, name: nextName, email: nextEmail };
+      if (nextName === prev.name && nextEmail === prev.email) {
+        return prev;
+      }
+      return {
+        ...prev,
+        name: nextName,
+        email: nextEmail,
+      };
     });
   }, [authUser]);
 
@@ -13124,6 +13148,12 @@ const mapProfileRow = (row) => {
         'app_tutorial_completed_at',
         'has_completed_habits_tutorial',
         'habits_tutorial_completed_at',
+        ...(profileEmailVerificationColumnSupportRef.current.email_verified
+          ? ['email_verified']
+          : []),
+        ...(profileEmailVerificationColumnSupportRef.current.email_verified_at
+          ? ['email_verified_at']
+          : []),
         'badge_slot_1',
         'badge_slot_2',
         'badge_slot_3',
@@ -13145,6 +13175,14 @@ const mapProfileRow = (row) => {
           if (!missingColumn) return { row: null, error };
           if (Object.prototype.hasOwnProperty.call(profileGoalColumnSupportRef.current, missingColumn)) {
             profileGoalColumnSupportRef.current[missingColumn] = false;
+          }
+          if (
+            Object.prototype.hasOwnProperty.call(
+              profileEmailVerificationColumnSupportRef.current,
+              missingColumn
+            )
+          ) {
+            profileEmailVerificationColumnSupportRef.current[missingColumn] = false;
           }
           const nextColumns = selectedColumns.filter(
             (name) => name.toLowerCase() !== missingColumn
@@ -13259,6 +13297,16 @@ const mapProfileRow = (row) => {
     const userId = authUser?.id || fields.id;
     if (!userId) return null;
     const nowISO = new Date().toISOString();
+    const resolvedEmailVerified = Object.prototype.hasOwnProperty.call(fields, 'email_verified')
+      ? !!fields.email_verified
+      : Object.prototype.hasOwnProperty.call(fields, 'emailVerified')
+        ? !!fields.emailVerified
+        : !!profile.emailVerified;
+    const resolvedEmailVerifiedAt = Object.prototype.hasOwnProperty.call(fields, 'email_verified_at')
+      ? fields.email_verified_at
+      : Object.prototype.hasOwnProperty.call(fields, 'emailVerifiedAt')
+        ? fields.emailVerifiedAt
+        : profile.emailVerifiedAt;
     const hasExplicitDailyStepsGoal =
       Object.prototype.hasOwnProperty.call(fields, 'daily_steps_goal') ||
       Object.prototype.hasOwnProperty.call(fields, 'dailyStepsGoal');
@@ -13300,6 +13348,12 @@ const mapProfileRow = (row) => {
         profile.username ??
         null,
       email: fields.email ?? authUser?.email ?? profile.email ?? defaultProfile.email,
+      email_verified: profileEmailVerificationColumnSupportRef.current.email_verified
+        ? resolvedEmailVerified
+        : undefined,
+      email_verified_at: profileEmailVerificationColumnSupportRef.current.email_verified_at
+        ? resolvedEmailVerifiedAt
+        : undefined,
       avatar_url: fields.avatar_url ?? fields.photo ?? profile.photo ?? undefined,
       photo: fields.photo ?? profile.photo ?? undefined,
       has_onboarded: fields.has_onboarded ?? hasOnboarded,
@@ -13452,6 +13506,14 @@ const mapProfileRow = (row) => {
           if (Object.prototype.hasOwnProperty.call(profileGoalColumnSupportRef.current, missingColumn)) {
             profileGoalColumnSupportRef.current[missingColumn] = false;
           }
+          if (
+            Object.prototype.hasOwnProperty.call(
+              profileEmailVerificationColumnSupportRef.current,
+              missingColumn
+            )
+          ) {
+            profileEmailVerificationColumnSupportRef.current[missingColumn] = false;
+          }
           nextPayload = pruneUndefined({ ...nextPayload, [missingColumn]: undefined });
           continue;
         }
@@ -13508,6 +13570,13 @@ const mapProfileRow = (row) => {
     const nextDailyStepsGoal = hasExplicitDailyStepsGoal
       ? toRoundedPositiveIntOrNull(explicitDailyStepsGoal)
       : toRoundedPositiveIntOrNull(profile.dailyStepsGoal);
+    const currentEmail = String(profile?.email || '')
+      .trim()
+      .toLowerCase();
+    const nextEmail = String(merged?.email || '')
+      .trim()
+      .toLowerCase();
+    const emailChanged = Boolean(nextEmail) && nextEmail !== currentEmail;
 
     let avatarUrl = merged.photo;
     if (updates.photo) {
@@ -13521,6 +13590,9 @@ const mapProfileRow = (row) => {
       avatar_url: avatarUrl,
       preferredDailyCalorieGoal: nextPreferredDailyCalorieGoal,
       dailyStepsGoal: nextDailyStepsGoal,
+      emailVerified: emailChanged ? false : !!merged.emailVerified,
+      emailVerifiedAt: emailChanged ? null : merged.emailVerifiedAt,
+      email_verified_at: emailChanged ? null : merged.emailVerifiedAt,
       dailyCalorieGoal: hasWeightManagerGoal
         ? weightManagerTargetCaloriesValue
         : nextPreferredDailyCalorieGoal ?? merged.dailyCalorieGoal,
@@ -13554,6 +13626,8 @@ const mapProfileRow = (row) => {
       weightManagerProteinGrams: newLocalProfile.weightManagerProteinGrams,
       weightManagerCarbsGrams: newLocalProfile.weightManagerCarbsGrams,
       weightManagerFatGrams: newLocalProfile.weightManagerFatGrams,
+      emailVerified: newLocalProfile.emailVerified,
+      emailVerifiedAt: newLocalProfile.emailVerifiedAt,
     };
 
     return upsertProfileRow(payload);
@@ -14310,7 +14384,7 @@ const mapProfileRow = (row) => {
     persistProfileLocally,
   ]);
 
-  const setActiveUser = async (user) => {
+  const setActiveUser = useCallback(async (user) => {
     // `user` is a Supabase auth user object
     const isSameUser = authUser?.id && user?.id && String(authUser.id) === String(user.id);
     setProfileLoaded(false);
@@ -14350,7 +14424,7 @@ const mapProfileRow = (row) => {
 
     await hydrateCachedProfile(user.id);
     setAuthUser(user);
-  };
+  }, [authUser?.id, hydrateCachedProfile]);
 
   const validatePasswordRequirements = (password) => {
     if (!password || password.length < 6) {
@@ -14493,14 +14567,104 @@ const mapProfileRow = (row) => {
       activeSession = sessionData?.session || activeSession;
     }
 
-    // If email confirmation is required, user can exist while session is still null.
-    // Only activate app-side user state once we have an authenticated session.
     if (user && activeSession?.access_token && activeSession?.refresh_token) {
       await setActiveUser(user);
     }
 
     return { user, session: activeSession };
   };
+
+  const refreshEmailVerificationState = useCallback(
+    async (userIdOverride = null) => {
+      const userId = userIdOverride || authUser?.id;
+      if (!userId) {
+        return {
+          emailVerified: false,
+          emailVerifiedAt: null,
+        };
+      }
+
+      const row = await fetchProfileFromSupabase(userId);
+      const mapped = row ? mapProfileRow(row) : null;
+      return {
+        emailVerified: !!mapped?.emailVerified,
+        emailVerifiedAt: mapped?.emailVerifiedAt || null,
+      };
+    },
+    [authUser?.id]
+  );
+
+  const sendEmailVerification = useCallback(
+    async (emailOverride = null) => {
+      if (!authUser?.id) {
+        throw new Error('You must be logged in to verify your email.');
+      }
+
+      const email = String(emailOverride || authUser?.email || profile.email || '')
+        .trim()
+        .toLowerCase();
+
+      if (!email) {
+        throw new Error('No email address is available for verification.');
+      }
+
+      const { data, error } = await supabase.functions.invoke('send-email-verification', {
+        body: { email },
+      });
+
+      if (error) {
+        throw new Error(error.message || 'Unable to send verification email.');
+      }
+
+      return data || { ok: true };
+    },
+    [authUser?.email, authUser?.id, profile.email]
+  );
+
+  const verifyEmailCode = useCallback(
+    async (code) => {
+      if (!authUser?.id) {
+        throw new Error('You must be logged in to verify your email.');
+      }
+
+      const normalizedCode = String(code || '')
+        .replace(/\D/g, '')
+        .slice(0, 6);
+
+      if (normalizedCode.length !== 6) {
+        throw new Error('Enter the 6-digit verification code.');
+      }
+
+      const { data, error } = await supabase.functions.invoke('verify-email-code', {
+        body: { code: normalizedCode },
+      });
+
+      if (error) {
+        throw new Error(error.message || 'Unable to verify email.');
+      }
+
+      const nextEmailVerifiedAt = data?.emailVerifiedAt || new Date().toISOString();
+      const nextProfile = {
+        ...profile,
+        emailVerified: true,
+        emailVerifiedAt: nextEmailVerifiedAt,
+        email_verified_at: nextEmailVerifiedAt,
+      };
+
+      setProfile(nextProfile);
+      if (authUser?.id) {
+        setCachedProfile(authUser.id, nextProfile);
+        persistProfileLocally(authUser.id, nextProfile, hasOnboarded);
+      }
+
+      return data || {
+        ok: true,
+        emailVerified: true,
+        emailVerifiedAt: nextEmailVerifiedAt,
+      };
+    },
+    [authUser?.id, hasOnboarded, persistProfileLocally, profile, setCachedProfile]
+  );
 
   const signOut = async () => {
     try {
@@ -15987,6 +16151,8 @@ const mapProfileRow = (row) => {
 
     // Auth
     authUser,
+    isEmailVerified: !!computedProfile?.emailVerified,
+    emailVerifiedAt: computedProfile?.emailVerifiedAt || null,
     mfaFactors,
     mfaCurrentLevel,
     mfaNextLevel,
@@ -16002,6 +16168,9 @@ const mapProfileRow = (row) => {
     signIn,
     checkAccountAvailability,
     signUp,
+    sendEmailVerification,
+    verifyEmailCode,
+    refreshEmailVerificationState,
     signOut,
     deleteAccount,
     persistOnboarding,
