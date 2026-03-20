@@ -95,11 +95,19 @@ const sha256Hex = async (value: string) => {
 const hashVerificationCode = async (userId: string, email: string, code: string) =>
   await sha256Hex(`${userId}:${email}:${code}:${emailVerificationSecret}`);
 
+const summarizeHttpBody = (body: string) =>
+  String(body || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+
 const sendVerificationEmail = async (email: string, code: string) => {
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${resendApiKey}`,
+      Accept: "application/json",
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -122,10 +130,34 @@ const sendVerificationEmail = async (email: string, code: string) => {
     }),
   });
 
-  const payload = await response.json().catch(() => ({}));
+  const contentType = response.headers.get("content-type") || "";
+  const rawBody = await response.text();
+  let payload: Record<string, unknown> = {};
+
+  if (contentType.toLowerCase().includes("application/json")) {
+    try {
+      payload = JSON.parse(rawBody || "{}");
+    } catch (_parseError) {
+      payload = {};
+    }
+  }
+
   if (!response.ok) {
+    const payloadMessage = payload["message"];
+    const payloadError = payload["error"];
+    const payloadName = payload["name"];
+    const payloadSummary =
+      (typeof payloadMessage === "string" && payloadMessage.trim()) ||
+      (typeof payloadError === "string" && payloadError.trim()) ||
+      (typeof payloadName === "string" && payloadName.trim()) ||
+      "";
+    const bodySummary = summarizeHttpBody(rawBody);
     throw new Error(
-      String(payload?.message || payload?.error || "Unable to send verification email."),
+      String(
+        payloadSummary ||
+          bodySummary ||
+          `Resend request failed with status ${response.status}.`
+      ),
     );
   }
 

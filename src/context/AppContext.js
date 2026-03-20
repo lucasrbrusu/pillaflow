@@ -71,6 +71,36 @@ export const useApp = () => {
   return context;
 };
 
+const readEdgeFunctionErrorMessage = async (error, fallbackMessage) => {
+  const fallback = error?.message || fallbackMessage;
+  const response = error?.context;
+
+  if (!response || typeof response.clone !== 'function') {
+    return fallback;
+  }
+
+  try {
+    const payload = await response.clone().json();
+    const message = payload?.error || payload?.message;
+    if (typeof message === 'string' && message.trim()) {
+      return message.trim();
+    }
+  } catch (_jsonError) {
+    // Fall through to plain text when the response is not JSON.
+  }
+
+  try {
+    const text = await response.clone().text();
+    if (typeof text === 'string' && text.trim()) {
+      return text.trim();
+    }
+  } catch (_textError) {
+    // Ignore parsing failures and fall back to the SDK message.
+  }
+
+  return fallback;
+};
+
 const STORAGE_KEYS = {
   HABITS: '@pillaflow_habits',
   TASKS: '@pillaflow_tasks',
@@ -14613,7 +14643,9 @@ const mapProfileRow = (row) => {
       });
 
       if (error) {
-        throw new Error(error.message || 'Unable to send verification email.');
+        throw new Error(
+          await readEdgeFunctionErrorMessage(error, 'Unable to send verification email.')
+        );
       }
 
       return data || { ok: true };
@@ -14640,7 +14672,7 @@ const mapProfileRow = (row) => {
       });
 
       if (error) {
-        throw new Error(error.message || 'Unable to verify email.');
+        throw new Error(await readEdgeFunctionErrorMessage(error, 'Unable to verify email.'));
       }
 
       const nextEmailVerifiedAt = data?.emailVerifiedAt || new Date().toISOString();
